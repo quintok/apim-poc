@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Contoso.Apis.Policies</RootNamespace>
+    <AssemblyName>Contoso.Apis.Policies</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Azure API Management Policy Toolkit (formerly the community "Mielek"
+      libraries — now maintained under github.com/Azure).
+      Lets us author APIM policies as strongly-typed C# code and compile
+      them to the XML format the APIM gateway expects.
+
+      NOTE: the toolkit packages are NOT yet on nuget.org. Download the
+      latest .nupkg files from
+        https://github.com/Azure/azure-api-management-policy-toolkit/releases
+      into the repo-root `packages/` folder. The `nuget.config` at the repo
+      root wires that folder up as a local feed.
+    -->
+    <PackageReference Include="Microsoft.Azure.ApiManagement.PolicyToolkit.Authoring" Version="1.0.0" />
+  </ItemGroup>
+
+  <!--
+    Compile-to-XML output location. The XML files live under $(OutputXmlDir)
+    so deployment tooling (APIOps, Bicep `loadTextContent`, az CLI) can pick
+    them up without rebuilding the .NET assembly. `dev-test.sh` and the
+    Buildkite pipeline invoke the `azure-apim-policy-compiler` dotnet tool
+    (declared in `.config/dotnet-tools.json`) against the project's source
+    folder and write into this directory.
+  -->
+  <PropertyGroup>
+    <OutputXmlDir>$(MSBuildThisFileDirectory)..\..\dist\policies</OutputXmlDir>
+  </PropertyGroup>
+
+  <Target Name="EnsureDistPoliciesDir" BeforeTargets="Build">
+    <MakeDir Directories="$(OutputXmlDir)" Condition="!Exists('$(OutputXmlDir)')" />
+  </Target>
+
+</Project>
