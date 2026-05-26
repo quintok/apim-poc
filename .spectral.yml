@@ -1,0 +1,44 @@
+# Spectral ruleset for Contoso API specifications.
+#
+# Inherits the well-known `spectral:oas` ruleset (OpenAPI best practices)
+# and layers Contoso-specific guidance on top. Tweak severities or add
+# new rules as the API style guide evolves.
+#
+# Run locally:
+#   npx --yes @stoplight/spectral-cli lint "openapi/**/*.{yaml,yml,json}"
+extends:
+  - spectral:oas
+
+rules:
+  # Every operation needs an operationId so SDK generators and APIOps
+  # tooling can produce stable identifiers.
+  operation-operationId: error
+  operation-operationId-unique: error
+
+  # Tags & descriptions improve generated docs and developer portal UX.
+  operation-tag-defined: error
+  operation-description: warn
+  info-contact: warn
+  info-license: warn
+
+  # Discourage trailing slashes in paths — they cause subtle routing bugs
+  # behind APIM and most reverse proxies.
+  contoso-no-trailing-slash:
+    description: Paths should not end with a trailing slash.
+    severity: error
+    given: $.paths[*]~
+    then:
+      function: pattern
+      functionOptions:
+        notMatch: "/$"
+
+  # Encourage versioned URLs (e.g. /v1, /v2) so breaking changes are
+  # explicit at the gateway.
+  contoso-versioned-path:
+    description: Server URLs should include an explicit /v{n} segment.
+    severity: warn
+    given: $.servers[*].url
+    then:
+      function: pattern
+      functionOptions:
+        match: "/v\\d+"

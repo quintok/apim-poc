@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Contoso.Apis.Policies.Tests</RootNamespace>
+    <AssemblyName>Contoso.Apis.Policies.Tests</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+
+    <!--
+      Policy Toolkit test helpers — provide `MockInboundContext` etc. to
+      simulate an APIM execution context so we can unit-test fragments
+      without deploying to a real gateway. See note in the src csproj
+      about installing toolkit packages into the local `packages/` feed.
+    -->
+    <PackageReference Include="Microsoft.Azure.ApiManagement.PolicyToolkit.Testing" Version="1.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Contoso.Apis.Policies\Contoso.Apis.Policies.csproj" />
+  </ItemGroup>
+
+</Project>

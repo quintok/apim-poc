@@ -1,0 +1,129 @@
+openapi: 3.0.3
+info:
+  title: Petstore API
+  description: |
+    Minimal example API used to exercise the Spectral linter and the
+    policy compilation pipeline. Replace with your real API contract.
+  version: 1.0.0
+  contact:
+    name: Contoso API Platform Team
+    email: apis@contoso.example
+  license:
+    name: MIT
+servers:
+  - url: https://api.contoso.example/petstore/v1
+    description: Production
+tags:
+  - name: pets
+    description: Operations on pets
+paths:
+  /pets:
+    get:
+      summary: List pets
+      operationId: listPets
+      tags: [pets]
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of pets to return.
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: A page of pets.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pets'
+        default:
+          description: Unexpected error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      summary: Create a pet
+      operationId: createPet
+      tags: [pets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewPet'
+      responses:
+        '201':
+          description: Pet created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+        default:
+          description: Unexpected error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /pets/{petId}:
+    get:
+      summary: Get a pet by id
+      operationId: getPetById
+      tags: [pets]
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          description: Unique identifier of the pet.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The requested pet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+        '404':
+          description: Pet not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  schemas:
+    Pet:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        tag:
+          type: string
+    NewPet:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        tag:
+          type: string
+    Pets:
+      type: array
+      items:
+        $ref: '#/components/schemas/Pet'
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: integer
+          format: int32
+        message:
+          type: string

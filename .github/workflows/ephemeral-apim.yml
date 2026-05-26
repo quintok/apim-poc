@@ -1,0 +1,86 @@
+# Ephemeral APIM provisioning workflow.
+#
+# Triggered when a PR is labelled `preview`. Deploys a short-lived APIM
+# instance (named after the PR number) using the Bicep template under
+# `infra/` so reviewers can validate policies and OpenAPI contracts end-to-end.
+#
+# This file is a demonstration scaffold. To make it functional:
+#   1. Configure the `azure/login` action with an OIDC-enabled service
+#      principal (Federated Credentials). Store the client / tenant /
+#      subscription IDs as repository secrets.
+#   2. Pre-create the target resource group OR change the deployment to a
+#      subscription-scoped one.
+#   3. Plug in your VNet / private DNS zone IDs in `infra/main.parameters.json`.
+#
+# Cleanup is handled by a companion workflow on PR close (left as TODO).
+
+name: ephemeral-apim
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  id-token: write   # required for OIDC login to Azure
+  contents: read
+  pull-requests: write
+
+jobs:
+  provision:
+    if: contains(github.event.pull_request.labels.*.name, 'preview')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ephemeral-apim-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    env:
+      APIM_NAME: contoso-apim-pr-${{ github.event.pull_request.number }}
+      RESOURCE_GROUP: rg-apim-ephemeral
+      LOCATION: australiaeast
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build & compile policies to XML
+        run: |
+          dotnet restore APIMPolicies.sln
+          dotnet tool restore
+          dotnet build APIMPolicies.sln -c Release --no-restore
+          dotnet azure-apim-policy-compiler \
+            --s ./src/Contoso.Apis.Policies \
+            --o ./dist/policies \
+            --format true
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy APIM (Bicep)
+        uses: azure/arm-deploy@v2
+        with:
+          scope: resourcegroup
+          resourceGroupName: ${{ env.RESOURCE_GROUP }}
+          template: infra/main.bicep
+          parameters: >-
+            apimName=${{ env.APIM_NAME }}
+            location=${{ env.LOCATION }}
+            publisherEmail=apis@contoso.example
+            publisherName="Contoso APIs"
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const apim = process.env.APIM_NAME;
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `🚀 Ephemeral APIM **${apim}** provisioning kicked off. Gateway URL will be available shortly.`
+            });

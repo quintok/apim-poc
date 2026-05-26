@@ -1,0 +1,70 @@
+# Buildkite pipeline for the Azure APIM Policy Development Pipeline.
+#
+# Mirrors `./dev-test.sh` so the local and CI experiences stay in lock-step.
+# Adjust `agents:` queues and `plugins:` to match your Buildkite cluster.
+
+steps:
+  - label: ":dotnet: Build & Test"
+    key: build-test
+    command:
+      - "dotnet restore APIMPolicies.sln"
+      - "dotnet tool restore"
+      - "dotnet build APIMPolicies.sln -c Release --no-restore"
+      - "dotnet test APIMPolicies.sln -c Release --no-build --logger 'trx;LogFileName=test-results.trx'"
+    artifact_paths:
+      - "**/TestResults/*.trx"
+    plugins:
+      - docker#v5.11.0:
+          image: "mcr.microsoft.com/dotnet/sdk:8.0"
+          workdir: /workdir
+
+  - label: ":hammer_and_wrench: Compile policies to XML"
+    key: compile-policies
+    depends_on: build-test
+    command:
+      - "dotnet tool restore"
+      - "dotnet azure-apim-policy-compiler --s ./src/Contoso.Apis.Policies --o ./dist/policies --format true"
+    artifact_paths:
+      - "dist/policies/*.xml"
+    plugins:
+      - docker#v5.11.0:
+          image: "mcr.microsoft.com/dotnet/sdk:8.0"
+          workdir: /workdir
+
+  - label: ":mag: Spectral lint OpenAPI"
+    key: spectral
+    command:
+      - "npx --yes @stoplight/spectral-cli lint --ruleset .spectral.yml 'openapi/**/*.{yaml,yml,json}'"
+    plugins:
+      - docker#v5.11.0:
+          image: "node:20-alpine"
+          workdir: /workdir
+
+  - label: ":left_right_arrow: OpenAPI breaking-change diff"
+    key: openapi-diff
+    soft_fail:
+      # Don't block merges on breaking changes — surface them as warnings.
+      # Flip to `false` once the team is ready to enforce.
+      - exit_status: 1
+    command:
+      - "bash scripts/openapi-diff.sh ${BUILDKITE_PULL_REQUEST_BASE_BRANCH:-origin/main}"
+    plugins:
+      - docker#v5.11.0:
+          image: "node:20-alpine"
+          workdir: /workdir
+
+  - wait: ~
+
+  - label: ":package: Package policy artifacts"
+    key: package
+    depends_on:
+      - compile-policies
+      - spectral
+    command:
+      - "buildkite-agent artifact download 'dist/policies/*.xml' ./dist/policies/"
+      - "tar -czf apim-policies.tar.gz -C dist policies"
+    artifact_paths:
+      - "apim-policies.tar.gz"
+
+  # Optional: trigger ephemeral APIM provisioning via GitHub Actions when a
+  # PR is labelled `preview`. Implemented in `.github/workflows/`.

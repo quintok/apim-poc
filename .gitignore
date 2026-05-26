@@ -1,0 +1,41 @@
+# Build outputs
+bin/
+obj/
+out/
+dist/
+
+# IDE / editor
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# .NET
+*.nupkg
+*.snupkg
+*.pdb
+project.lock.json
+TestResults/
+
+# Local NuGet feed contents (toolkit .nupkg files are downloaded per-clone)
+packages/*.nupkg
+
+# Node / Spectral
+node_modules/
+npm-debug.log*
+yarn-error.log
+package-lock.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / temp
+*.log
+*.tmp
+
+# Local secrets / env
+.env
+.env.*
+!.env.example
