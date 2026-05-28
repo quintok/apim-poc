@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/apiops/main/configuration.schema.json
+#
+# APIOps environment overrides for DEV.
+# The APIOps publisher merges these values on top of the base artifact tree
+# at deploy time. Only values that differ from the baseline need entries here.
+#
+# Usage:
+#   apiops publish --configuration-file configuration.dev.yaml
+#
+apimServiceName: $(apimServiceName)
+
+namedValues:
+  - name: auth0-tenant-domain
+    properties:
+      value: dev-contoso.auth0.com
+  - name: auth0-audience
+    properties:
+      value: https://api.dev.contoso.example
+
+apis:
+  - name: petstore
+    properties:
+      serviceUrl: https://echoapi.cloudapp.net/api

@@ -1,0 +1,8 @@
+{
+  "properties": {
+    "displayName": "auth0-tenant-domain",
+    "value": "",
+    "secret": false,
+    "tags": ["auth0"]
+  }
+}

@@ -1,52 +1,52 @@
 namespace Contoso.Apis.Policies.Tests;
 
+using Azure.ApiManagement.PolicyToolkit.Testing;
+using Contoso.Apis.Policies.Documents;
 using Contoso.Apis.Policies.Fragments;
-using Microsoft.Azure.ApiManagement.PolicyToolkit.Testing;
 using Xunit;
 
 /// <summary>
-/// Unit tests for <see cref="AddCorrelationIdHeader"/>.
+/// Unit tests for correlation-id header propagation.
 ///
-/// The toolkit's <c>MockInboundContext</c> / <c>MockOutboundContext</c>
-/// simulate the APIM execution context so we can assert on the resulting
-/// policy operations without spinning up a gateway. Add new test methods
-/// here when you extend the fragment, and create sibling test classes per
-/// new fragment under <c>src/Contoso.Apis.Policies/Fragments/</c>.
+/// The correlation-id logic now lives in <see cref="GlobalPolicy"/> (the
+/// service-level policy applied to all APIs). These tests verify that the
+/// global document sets the header, and that <see cref="PetstoreApiPolicy"/>
+/// no longer duplicates it.
 /// </summary>
 public class AddCorrelationIdHeaderTests
 {
     [Fact]
-    public void ApplyInbound_SetsCorrelationIdHeader()
+    public void GlobalPolicy_Inbound_SetsCorrelationIdHeader()
     {
-        // Arrange
-        var context = new MockInboundContext();
+        var test = new TestDocument(new GlobalPolicy());
+        test.RunInbound();
 
-        // Act
-        AddCorrelationIdHeader.ApplyInbound(context);
-
-        // Assert: a set-header operation for our header name was recorded.
-        Assert.Contains(
-            context.Operations,
-            op => op.Name == "set-header"
-                  && op.Arguments.TryGetValue("name", out var name)
-                  && name?.ToString() == AddCorrelationIdHeader.HeaderName);
+        Assert.True(
+            test.Context.Request.Headers.ContainsKey(AddCorrelationIdHeader.HeaderName),
+            $"expected request header '{AddCorrelationIdHeader.HeaderName}' to be set by global inbound policy");
     }
 
     [Fact]
-    public void ApplyOutbound_EchoesCorrelationIdHeader()
+    public void GlobalPolicy_Outbound_EchoesCorrelationIdHeader()
     {
-        // Arrange
-        var context = new MockOutboundContext();
+        var test = new TestDocument(new GlobalPolicy());
+        test.RunOutbound();
 
-        // Act
-        AddCorrelationIdHeader.ApplyOutbound(context);
+        Assert.True(
+            test.Context.Response.Headers.ContainsKey(AddCorrelationIdHeader.HeaderName),
+            $"expected response header '{AddCorrelationIdHeader.HeaderName}' to be set by global outbound policy");
+    }
 
-        // Assert
-        Assert.Contains(
-            context.Operations,
-            op => op.Name == "set-header"
-                  && op.Arguments.TryGetValue("name", out var name)
-                  && name?.ToString() == AddCorrelationIdHeader.HeaderName);
+    [Fact]
+    public void PetstoreApiPolicy_Inbound_DoesNotSetCorrelationIdHeader()
+    {
+        // PetstoreApiPolicy delegates correlation-id to the global policy via context.Base().
+        var test = new TestDocument(new PetstoreApiPolicy());
+        test.RunInbound();
+
+        Assert.False(
+            test.Context.Request.Headers.ContainsKey(AddCorrelationIdHeader.HeaderName),
+            $"PetstoreApiPolicy should NOT set '{AddCorrelationIdHeader.HeaderName}' — global policy owns it");
     }
 }
 

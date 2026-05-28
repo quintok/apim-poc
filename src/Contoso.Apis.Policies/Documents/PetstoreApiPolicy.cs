@@ -1,4 +1,4 @@
-using Microsoft.Azure.ApiManagement.PolicyToolkit.Authoring;
+using Azure.ApiManagement.PolicyToolkit.Authoring;
 
 namespace Contoso.Apis.Policies.Documents;
 
@@ -26,10 +26,9 @@ public class PetstoreApiPolicy : IDocument
     public void Inbound(IInboundContext context)
     {
         // Run base (product / global) inbound policies first.
+        // The global policy (GlobalPolicy.cs) handles correlation-id
+        // propagation for all APIs — no need to duplicate it here.
         context.Base();
-
-        // Reusable fragments compose by direct invocation.
-        AddCorrelationIdHeader.ApplyInbound(context);
 
         // TODO: add validate-jwt, rate-limit-by-key, set-backend-service, etc.
     }
@@ -37,14 +36,20 @@ public class PetstoreApiPolicy : IDocument
     /// <inheritdoc />
     public void Outbound(IOutboundContext context)
     {
+        // Correlation-id echo is handled by the global outbound policy.
         context.Base();
-        AddCorrelationIdHeader.ApplyOutbound(context);
     }
 
     /// <inheritdoc />
-    public void Backend(IBackendContext context) => context.Base();
+    public void Backend(IBackendContext context)
+    {
+        context.Base();
+    }
 
     /// <inheritdoc />
-    public void OnError(IOnErrorContext context) => context.Base();
+    public void OnError(IOnErrorContext context)
+    {
+        context.Base();
+    }
 }
 

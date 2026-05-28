@@ -19,7 +19,7 @@
       into the repo-root `packages/` folder. The `nuget.config` at the repo
       root wires that folder up as a local feed.
     -->
-    <PackageReference Include="Microsoft.Azure.ApiManagement.PolicyToolkit.Authoring" Version="1.0.0" />
+    <PackageReference Include="Azure.ApiManagement.PolicyToolkit.Authoring" Version="1.0.0" />
   </ItemGroup>
 
   <!--

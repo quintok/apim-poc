@@ -27,11 +27,13 @@ param publisherEmail string
 @description('Publisher organisation name shown in the developer portal.')
 param publisherName string
 
-@description('APIM SKU. Use `Premium` or `PremiumV2` (where GA) for production. `Developer` is the cheapest and is ideal for ephemeral PR environments.')
+@description('APIM SKU. Use `Premium` or `PremiumV2` (where GA) for production. `Developer` is the cheapest and is ideal for ephemeral PR environments. `StandardV2` / `BasicV2` are the v2 platform tiers.')
 @allowed([
   'Developer'
   'Basic'
+  'BasicV2'
   'Standard'
+  'StandardV2'
   'Premium'
   'PremiumV2'
 ])
@@ -57,6 +59,130 @@ param subnetResourceId string = ''
 param tags object = {
   workload: 'apim-policy-pipeline'
   managedBy: 'bicep'
+}
+
+// -----------------------------------------------------------------------------
+// Auth0 integration (opt-in)
+// -----------------------------------------------------------------------------
+// Three independent feature switches:
+//   * `auth0TenantDomain` non-empty       -> deploy APIM named values that the
+//                                            validate-auth0-jwt policy fragment
+//                                            resolves at request time.
+//   * `enableDelegation` true             -> deploy Storage + Flex Consumption
+//                                            Function App + Key Vault for the
+//                                            delegation handler, configure
+//                                            APIM portalsettings/delegation.
+//   * `enableObservability` true (default) -> deploy Log Analytics + App
+//                                            Insights + diagnostic settings
+//                                            for every resource above.
+// Existing dev deploys that pass none of the above (and disable observability)
+// see no behavioural change.
+// -----------------------------------------------------------------------------
+
+@description('Auth0 tenant domain WITHOUT scheme/trailing slash, e.g. `contoso.auth0.com`. Empty disables the named values that the validate-auth0-jwt policy fragment depends on.')
+param auth0TenantDomain string = ''
+
+@description('Auth0 API Identifier (audience) the access tokens must be issued for, e.g. `https://api.contoso.example`. Required when auth0TenantDomain is set.')
+param auth0Audience string = ''
+
+@description('Deploy the developer portal delegation infrastructure (Key Vault, App Service shell, portalsettings/delegation). The handler code itself is BYO — see README.')
+param enableDelegation bool = false
+
+@description('Public URL of the delegation handler. When empty AND enableDelegation=true the URL of the provisioned App Service is used.')
+param delegationHandlerUrl string = ''
+
+@description('Hex/base64 validation key APIM uses to HMAC-SHA512-sign delegation request parameters. Generate with: `openssl rand -base64 48`. Stored in Key Vault, not in resource properties.')
+@secure()
+param delegationValidationKey string = ''
+
+@description('Auth0 application client ID (a public value — NOT a secret). Required when enableDelegation=true.')
+param auth0ClientId string = ''
+
+@description('Auth0 application client secret. Stored in Key Vault; referenced by the Function App as a Key Vault reference.')
+@secure()
+param auth0ClientSecret string = ''
+
+@description('Maximum number of Flex Consumption instances. Default 100 (the platform max for FC1).')
+@minValue(40)
+@maxValue(1000)
+param delegationHandlerMaxInstances int = 100
+
+@description('Instance memory (MB) for the Flex Consumption plan. Allowed values per platform: 512, 2048, 4096.')
+@allowed([
+  512
+  2048
+  4096
+])
+param delegationHandlerInstanceMemoryMB int = 2048
+
+// -----------------------------------------------------------------------------
+// Observability + governance (opt-in)
+// -----------------------------------------------------------------------------
+
+@description('Deploy Log Analytics workspace + Application Insights + diagnostic settings for APIM, KV, Storage, and the Function App. Required for the handler code’s Application Insights telemetry to actually flow.')
+param enableObservability bool = true
+
+@description('Log Analytics workspace retention in days (Pay-As-You-Go: 30-730).')
+@minValue(30)
+@maxValue(730)
+param logRetentionDays int = 30
+
+@description('Enable Key Vault purge protection. Once on it CANNOT be turned off for the lifetime of the vault. Strongly recommended for production.')
+param keyVaultPurgeProtection bool = false
+
+@description('Key Vault soft-delete retention in days. 7-90.')
+@minValue(7)
+@maxValue(90)
+param keyVaultSoftDeleteRetentionDays int = 7
+
+@description('Storage account redundancy. Standard_LRS for dev, Standard_ZRS or Standard_GZRS for production single-region / geo HA.')
+@allowed([
+  'Standard_LRS'
+  'Standard_ZRS'
+  'Standard_GZRS'
+  'Standard_RAGRS'
+])
+param delegationStorageSku string = 'Standard_LRS'
+
+@description('Deploy a custom least-privilege role definition (users/read + users/write + users/token/action) and assign that to the handler MI instead of the broad `API Management Service Contributor`. Requires Microsoft.Authorization/roleDefinitions/write at the subscription scope.')
+param useCustomApimRole bool = false
+
+// -----------------------------------------------------------------------------
+// Log Analytics workspace + Application Insights (workspace-based)
+// -----------------------------------------------------------------------------
+// Defined ahead of APIM so the APIM service/loggers child resource can
+// reference the AI instrumentation key without ordering tricks.
+// -----------------------------------------------------------------------------
+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = if (enableObservability) {
+  name: '${apimName}-law'
+  location: location
+  tags: tags
+  properties: {
+    sku: {
+      name: 'PerGB2018'
+    }
+    retentionInDays: logRetentionDays
+    features: {
+      enableLogAccessUsingOnlyResourcePermissions: true
+    }
+    publicNetworkAccessForIngestion: 'Enabled'
+    publicNetworkAccessForQuery: 'Enabled'
+  }
+}
+
+resource appInsights 'Microsoft.Insights/components@2020-02-02' = if (enableObservability) {
+  name: '${apimName}-ai'
+  location: location
+  tags: tags
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: logAnalytics.id
+    IngestionMode: 'LogAnalytics'
+    publicNetworkAccessForIngestion: 'Enabled'
+    publicNetworkAccessForQuery: 'Enabled'
+    DisableLocalAuth: false
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -94,6 +220,514 @@ resource apim 'Microsoft.ApiManagement/service@2023-05-01-preview' = {
 }
 
 // -----------------------------------------------------------------------------
+// APIM observability: logger (App Insights) + service-level diagnostics +
+// gateway diagnostic settings to Log Analytics.
+// -----------------------------------------------------------------------------
+// Without this triplet, validate-jwt failures + gateway requests stay
+// invisible. The logger object is the bridge between the APIM control
+// plane and App Insights; `service/diagnostics/applicationinsights`
+// is what actually emits per-request telemetry.
+// -----------------------------------------------------------------------------
+resource apimAppInsightsLogger 'Microsoft.ApiManagement/service/loggers@2023-05-01-preview' = if (enableObservability) {
+  parent: apim
+  name: 'applicationinsights'
+  properties: {
+    loggerType: 'applicationInsights'
+    description: 'Workspace-based Application Insights'
+    resourceId: appInsights.id
+    credentials: {
+      // Using the AI connection string (preferred over instrumentation key).
+      connectionString: appInsights.properties.ConnectionString
+    }
+    isBuffered: true
+  }
+}
+
+resource apimAppInsightsDiagnostics 'Microsoft.ApiManagement/service/diagnostics@2023-05-01-preview' = if (enableObservability) {
+  parent: apim
+  name: 'applicationinsights'
+  properties: {
+    loggerId: apimAppInsightsLogger.id
+    alwaysLog: 'allErrors'
+    sampling: {
+      samplingType: 'fixed'
+      percentage: 100
+    }
+    httpCorrelationProtocol: 'W3C'
+    verbosity: 'information'
+    logClientIp: true
+    frontend: {
+      request: {
+        headers: ['x-correlation-id']
+      }
+      response: {}
+    }
+    backend: {
+      request: {}
+      response: {}
+    }
+  }
+}
+
+resource apimGatewayDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (enableObservability) {
+  scope: apim
+  name: 'to-log-analytics'
+  properties: {
+    workspaceId: logAnalytics.id
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+    metrics: [
+      {
+        category: 'AllMetrics'
+        enabled: true
+      }
+    ]
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Auth0 named values
+// -----------------------------------------------------------------------------
+// In production these are deployed by APIOps (not Bicep) so the APIM
+// configuration tree has a single owner. The parameters remain here so
+// the delegation handler's App Settings can still reference the values
+// at deploy time.
+// -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// Delegation: Key Vault for the validation key + Auth0 client secret
+// -----------------------------------------------------------------------------
+// The handler App Service reads both via Key Vault references; APIM's
+// portalsettings/delegation receives the validation key directly (it is
+// configuration, not a runtime fetch).
+// -----------------------------------------------------------------------------
+var kvName = take(toLower(replace('${apimName}-deleg-kv', '_', '-')), 24)
+
+resource delegationKeyVault 'Microsoft.KeyVault/vaults@2023-07-01' = if (enableDelegation) {
+  name: kvName
+  location: location
+  tags: tags
+  properties: {
+    tenantId: subscription().tenantId
+    sku: {
+      family: 'A'
+      name: 'standard'
+    }
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: keyVaultSoftDeleteRetentionDays
+    // Once on, this CANNOT be turned off for the vault's lifetime. Surface
+    // as a parameter so dev environments stay disposable.
+    enablePurgeProtection: keyVaultPurgeProtection ? true : null
+    publicNetworkAccess: 'Enabled'
+    networkAcls: {
+      defaultAction: 'Allow'
+      bypass: 'AzureServices'
+    }
+  }
+}
+
+resource delegationKeyVaultDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (enableDelegation && enableObservability) {
+  scope: delegationKeyVault
+  name: 'to-log-analytics'
+  properties: {
+    workspaceId: logAnalytics.id
+    logs: [
+      {
+        categoryGroup: 'audit'
+        enabled: true
+      }
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+    metrics: [
+      {
+        category: 'AllMetrics'
+        enabled: true
+      }
+    ]
+  }
+}
+
+resource delegationKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (enableDelegation && !empty(delegationValidationKey)) {
+  parent: delegationKeyVault
+  name: 'apim-delegation-validation-key'
+  properties: {
+    value: delegationValidationKey
+  }
+}
+
+resource auth0SecretKv 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (enableDelegation && !empty(auth0ClientSecret)) {
+  parent: delegationKeyVault
+  name: 'auth0-client-secret'
+  properties: {
+    value: auth0ClientSecret
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Delegation handler: Flex Consumption Function App + Storage
+// -----------------------------------------------------------------------------
+// Flex Consumption (FC1) gives us scale-to-zero pricing with sub-second cold
+// start for HTTP triggers — ideal for an interactive OIDC roundtrip. The
+// runtime uses MI for storage access (no shared keys, no connection strings).
+//
+// The Function App is provisioned with the .NET 8 isolated runtime; the
+// Contoso.Apis.Portal.Delegation project under `src/` deploys here via
+//   func azure functionapp publish <name>  --or--
+//   az functionapp deployment source config-zip ...
+//
+// See `src/Contoso.Apis.Portal.Delegation/README.md` for the handler
+// implementation and deployment instructions.
+// -----------------------------------------------------------------------------
+
+// Storage account name: 3-24 chars, lowercase alphanumeric only.
+// `apimName` has minLength=1; the `deleg` suffix guarantees >=6 chars.
+var storageAccountName = take(toLower(replace(replace('${apimName}deleg', '-', ''), '_', '')), 24)
+var deploymentContainerName = 'function-deployment'
+
+resource handlerStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (enableDelegation) {
+  #disable-next-line BCP334
+  name: storageAccountName
+  location: location
+  tags: tags
+  sku: {
+    name: delegationStorageSku
+  }
+  kind: 'StorageV2'
+  properties: {
+    minimumTlsVersion: 'TLS1_2'
+    allowBlobPublicAccess: false
+    // Flex Consumption uses Managed Identity to access storage — no shared
+    // key access needed. Disabling shared key auth is a meaningful hardening
+    // step (blocks SAS attacks, account-key leaks).
+    allowSharedKeyAccess: false
+    publicNetworkAccess: 'Enabled'
+    supportsHttpsTrafficOnly: true
+  }
+}
+
+// Storage diagnostics: blob/queue/table sub-resources emit logs separately
+// from the account itself. Account-level only carries Transaction metrics.
+resource handlerStorageBlobDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (enableDelegation && enableObservability) {
+  scope: handlerStorageBlobSvc
+  name: 'to-log-analytics'
+  properties: {
+    workspaceId: logAnalytics.id
+    logs: [
+      {
+        categoryGroup: 'audit'
+        enabled: true
+      }
+    ]
+    metrics: [
+      {
+        category: 'Transaction'
+        enabled: true
+      }
+    ]
+  }
+}
+
+resource handlerStorageBlobSvc 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = if (enableDelegation) {
+  parent: handlerStorage
+  name: 'default'
+}
+
+resource handlerDeploymentContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = if (enableDelegation) {
+  parent: handlerStorageBlobSvc
+  name: deploymentContainerName
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+resource handlerPlan 'Microsoft.Web/serverfarms@2024-04-01' = if (enableDelegation) {
+  name: '${apimName}-deleg-plan'
+  location: location
+  tags: tags
+  sku: {
+    tier: 'FlexConsumption'
+    name: 'FC1'
+  }
+  kind: 'functionapp'
+  properties: {
+    reserved: true
+  }
+}
+
+resource handlerSite 'Microsoft.Web/sites@2024-04-01' = if (enableDelegation) {
+  name: '${apimName}-deleg'
+  location: location
+  tags: tags
+  kind: 'functionapp,linux'
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    serverFarmId: handlerPlan.id
+    httpsOnly: true
+    functionAppConfig: {
+      deployment: {
+        storage: {
+          type: 'blobContainer'
+          value: '${handlerStorage.properties.primaryEndpoints.blob}${deploymentContainerName}'
+          authentication: {
+            type: 'SystemAssignedIdentity'
+          }
+        }
+      }
+      runtime: {
+        name: 'dotnet-isolated'
+        version: '8.0'
+      }
+      scaleAndConcurrency: {
+        maximumInstanceCount: delegationHandlerMaxInstances
+        instanceMemoryMB: delegationHandlerInstanceMemoryMB
+      }
+    }
+    siteConfig: {
+      minTlsVersion: '1.2'
+      ftpsState: 'Disabled'
+      http20Enabled: true
+      appSettings: [
+        // Functions host uses MI for the AzureWebJobsStorage account
+        // (no connection string, no shared keys).
+        {
+          name: 'AzureWebJobsStorage__accountName'
+          value: handlerStorage.name
+        }
+        {
+          name: 'AzureWebJobsStorage__credential'
+          value: 'managedidentity'
+        }
+        // --- Auth0 OIDC ---
+        {
+          name: 'Auth0__Domain'
+          value: auth0TenantDomain
+        }
+        {
+          name: 'Auth0__Audience'
+          value: auth0Audience
+        }
+        {
+          name: 'Auth0__ClientId'
+          value: auth0ClientId
+        }
+        {
+          name: 'Auth0__ClientSecret'
+          value: enableDelegation && !empty(auth0ClientSecret) ? '@Microsoft.KeyVault(SecretUri=${auth0SecretKv.properties.secretUri})' : ''
+        }
+        // --- APIM delegation contract ---
+        {
+          name: 'Apim__ServiceName'
+          value: apim.name
+        }
+        {
+          name: 'Apim__ResourceId'
+          value: apim.id
+        }
+        {
+          name: 'Apim__PortalUrl'
+          value: 'https://${apim.name}.developer.azure-api.net'
+        }
+        {
+          name: 'Apim__DelegationValidationKey'
+          value: enableDelegation && !empty(delegationValidationKey) ? '@Microsoft.KeyVault(SecretUri=${delegationKeySecret.properties.secretUri})' : ''
+        }
+        // ID token + state token validation tolerances
+        {
+          name: 'Auth0__ClockSkewSeconds'
+          value: '60'
+        }
+        {
+          name: 'State__LifetimeSeconds'
+          value: '600'
+        }
+        // Application Insights (workspace-based) connection string — makes
+        // `AddApplicationInsightsTelemetryWorkerService()` actually ship
+        // telemetry. Without this it silently no-ops.
+        {
+          name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+          value: enableObservability ? appInsights.properties.ConnectionString : ''
+        }
+      ]
+    }
+  }
+}
+
+resource handlerSiteDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (enableDelegation && enableObservability) {
+  scope: handlerSite
+  name: 'to-log-analytics'
+  properties: {
+    workspaceId: logAnalytics.id
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+    metrics: [
+      {
+        category: 'AllMetrics'
+        enabled: true
+      }
+    ]
+  }
+}
+
+// -----------------------------------------------------------------------------
+// RBAC for the handler MI
+// -----------------------------------------------------------------------------
+// Built-in role IDs are stable GUIDs — documented at:
+//   https://learn.microsoft.com/azure/role-based-access-control/built-in-roles
+// -----------------------------------------------------------------------------
+var keyVaultSecretsUserRoleId    = '4633458b-17de-408a-b874-0445c86b69e6' // Key Vault Secrets User
+var apimServiceContributorRoleId = '312a565d-c81f-4fd8-895a-4e21e48d571c' // API Management Service Contributor
+var storageBlobDataOwnerRoleId   = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b' // Storage Blob Data Owner
+var storageQueueDataContribRole  = '974c5e8b-45b9-4653-ba55-5f855dd0fb88' // Storage Queue Data Contributor (AzureWebJobsStorage queues)
+var storageTableDataContribRole  = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3' // Storage Table Data Contributor (AzureWebJobsStorage tables)
+
+resource handlerKvAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableDelegation) {
+  scope: delegationKeyVault
+  name: guid(delegationKeyVault.id, handlerSite.id, keyVaultSecretsUserRoleId)
+  properties: {
+    principalId: handlerSite.identity.principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Flex Consumption Function App MI → Storage. Required for both AzureWebJobsStorage
+// (host runtime tables/queues/blobs) and the deployment container (where the
+// publish step uploads the function package zip).
+resource handlerStorageBlobAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableDelegation) {
+  scope: handlerStorage
+  name: guid(handlerStorage.id, handlerSite.id, storageBlobDataOwnerRoleId)
+  properties: {
+    principalId: handlerSite.identity.principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataOwnerRoleId)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource handlerStorageQueueAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableDelegation) {
+  scope: handlerStorage
+  name: guid(handlerStorage.id, handlerSite.id, storageQueueDataContribRole)
+  properties: {
+    principalId: handlerSite.identity.principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageQueueDataContribRole)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource handlerStorageTableAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableDelegation) {
+  scope: handlerStorage
+  name: guid(handlerStorage.id, handlerSite.id, storageTableDataContribRole)
+  properties: {
+    principalId: handlerSite.identity.principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageTableDataContribRole)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// The handler needs to call APIM's data-plane REST endpoint
+//   POST .../users/{uid}/token
+// to mint a single-sign-on token after Auth0 authenticates the user.
+// Two RBAC strategies, controlled by `useCustomApimRole`:
+//   - false (default): built-in `API Management Service Contributor` —
+//     simple, works everywhere, broader than needed.
+//   - true: deploy a custom role granting only the three actions the
+//     handler actually needs, then assign that. Requires
+//     Microsoft.Authorization/roleDefinitions/write at the subscription scope.
+// -----------------------------------------------------------------------------
+resource apimUserSsoTokenMinterRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = if (enableDelegation && useCustomApimRole) {
+  name: guid(subscription().id, apim.id, 'apim-user-sso-token-minter')
+  scope: apim
+  properties: {
+    roleName: 'APIM User SSO Token Minter (${apimName})'
+    description: 'Least-privileged role for the delegation handler MI: read/write users and mint SSO tokens on a single APIM service.'
+    type: 'CustomRole'
+    permissions: [
+      {
+        actions: [
+          'Microsoft.ApiManagement/service/users/read'
+          'Microsoft.ApiManagement/service/users/write'
+          'Microsoft.ApiManagement/service/users/token/action'
+        ]
+        notActions: []
+        dataActions: []
+        notDataActions: []
+      }
+    ]
+    assignableScopes: [
+      apim.id
+    ]
+  }
+}
+
+resource handlerApimAccessCustom 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableDelegation && useCustomApimRole) {
+  scope: apim
+  name: guid(apim.id, handlerSite.id, 'custom-apim-user-sso-token-minter')
+  properties: {
+    principalId: handlerSite.identity.principalId
+    roleDefinitionId: apimUserSsoTokenMinterRole.id
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource handlerApimAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableDelegation && !useCustomApimRole) {
+  scope: apim
+  name: guid(apim.id, handlerSite.id, apimServiceContributorRoleId)
+  properties: {
+    principalId: handlerSite.identity.principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', apimServiceContributorRoleId)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// -----------------------------------------------------------------------------
+// APIM portalsettings/delegation
+// -----------------------------------------------------------------------------
+// Tells the dev portal to redirect signin/signup/subscribe operations to
+// `url` instead of showing the built-in pages. APIM signs each redirect with
+// HMAC-SHA512(validationKey) so the handler can verify authenticity.
+// -----------------------------------------------------------------------------
+var resolvedDelegationUrl = !empty(delegationHandlerUrl)
+  ? delegationHandlerUrl
+  : (enableDelegation ? 'https://${handlerSite.properties.defaultHostName}/delegation' : '')
+
+resource delegationSettings 'Microsoft.ApiManagement/service/portalsettings@2023-05-01-preview' = if (enableDelegation && !empty(delegationValidationKey)) {
+  parent: apim
+  name: 'delegation'
+  properties: {
+    url: resolvedDelegationUrl
+    validationKey: delegationValidationKey
+    subscriptions: {
+      enabled: true
+    }
+    userRegistration: {
+      enabled: true
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// APIs, subscriptions, policies, and named values are deployed by APIOps —
+// not Bicep. The deploy-local.ps1 script provides a smoke-test path that
+// pushes compiled policy XML and seeds a demo API via az rest / ARM, but
+// that is explicitly outside the IaC contract.
+//
+// See: docs/adrs/ADR-0001-author-policies-in-csharp.md
+// -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
 // Outputs
 // -----------------------------------------------------------------------------
 @description('Resource ID of the APIM service.')
@@ -104,3 +738,21 @@ output apimGatewayHostname string = apim.properties.gatewayUrl
 
 @description('Principal ID of the system-assigned managed identity (use for Key Vault access policies etc.).')
 output apimPrincipalId string = apim.identity.principalId
+
+@description('Developer portal URL.')
+output developerPortalUrl string = 'https://${apim.name}.developer.azure-api.net'
+
+@description('Default hostname of the (empty) delegation handler App Service. Deploy your handler code here.')
+output delegationHandlerHostname string = enableDelegation ? handlerSite.properties.defaultHostName : ''
+
+@description('Principal ID of the delegation handler’s managed identity.')
+output delegationHandlerPrincipalId string = enableDelegation ? handlerSite.identity.principalId : ''
+
+@description('Resource ID of the Key Vault holding the delegation validation key and Auth0 client secret.')
+output delegationKeyVaultId string = enableDelegation ? delegationKeyVault.id : ''
+
+@description('Resource ID of the Log Analytics workspace receiving diagnostic logs (empty when observability is disabled).')
+output logAnalyticsWorkspaceId string = enableObservability ? logAnalytics.id : ''
+
+@description('Resource ID of the Application Insights component used by APIM and the delegation handler (empty when observability is disabled).')
+output applicationInsightsId string = enableObservability ? appInsights.id : ''

@@ -19,7 +19,7 @@
       without deploying to a real gateway. See note in the src csproj
       about installing toolkit packages into the local `packages/` feed.
     -->
-    <PackageReference Include="Microsoft.Azure.ApiManagement.PolicyToolkit.Testing" Version="1.0.0" />
+    <PackageReference Include="Azure.ApiManagement.PolicyToolkit.Testing" Version="1.0.0" />
   </ItemGroup>
 
   <ItemGroup>

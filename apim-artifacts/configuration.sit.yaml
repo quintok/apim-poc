@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/apiops/main/configuration.schema.json
+#
+# APIOps environment overrides for SIT.
+#
+apimServiceName: $(apimServiceName)
+
+namedValues:
+  - name: auth0-tenant-domain
+    properties:
+      value: sit-contoso.auth0.com
+  - name: auth0-audience
+    properties:
+      value: https://api.sit.contoso.example
+
+apis:
+  - name: petstore
+    properties:
+      serviceUrl: https://petstore-backend.sit.contoso.example

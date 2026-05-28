@@ -33,6 +33,40 @@
         "environment": "dev",
         "managedBy": "bicep"
       }
+    },
+    "auth0TenantDomain": {
+      "// REPLACE": "Your Auth0 tenant domain, no scheme/trailing slash. Empty = the validate-auth0-jwt policy fragment cannot resolve its named values.",
+      "value": ""
+    },
+    "auth0Audience": {
+      "// REPLACE": "The Auth0 API Identifier the access tokens must be issued for, e.g. https://api.contoso.example",
+      "value": ""
+    },
+    "enableDelegation": {
+      "// REPLACE": "true to deploy the Key Vault + App Service shell + portalsettings/delegation config for the BYO Auth0 delegation handler.",
+      "value": false
+    },
+    "delegationHandlerUrl": {
+      "// REPLACE": "Optional public URL of the delegation handler. Leave empty to default to the provisioned App Service hostname.",
+      "value": ""
+    },
+    "delegationValidationKey": {
+      "// REPLACE": "Required when enableDelegation=true. Generate with: openssl rand -base64 48. Prefer supplying via az deployment ... --parameters delegationValidationKey=...",
+      "value": ""
+    },
+    "auth0ClientSecret": {
+      "// REPLACE": "Required when enableDelegation=true. Auth0 application client secret. Prefer supplying via az deployment ... --parameters auth0ClientSecret=...",
+      "value": ""
+    },
+    "auth0ClientId": {
+      "// REPLACE": "Required when enableDelegation=true. Auth0 application client ID (public, not a secret). Visible in the Auth0 application Settings page.",
+      "value": ""
+    },
+    "delegationHandlerMaxInstances": {
+      "value": 100
+    },
+    "delegationHandlerInstanceMemoryMB": {
+      "value": 2048
     }
   }
 }

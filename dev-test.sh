@@ -63,7 +63,8 @@ run_step "dotnet build (APIMPolicies.sln)" \
 
 # --- 2. Unit tests ----------------------------------------------------------
 run_step "dotnet test (policy unit tests)" \
-  dotnet test APIMPolicies.sln --nologo -c Release --no-build || overall=1
+  dotnet test APIMPolicies.sln --nologo -c Release --no-build \
+    --filter "FullyQualifiedName!~SmokeTests" || overall=1
 
 # --- 3. Compile policy fragments -> XML -------------------------------------
 # The Policy Toolkit ships a `dotnet tool` named `azure-apim-policy-compiler`
@@ -75,7 +76,7 @@ run_step "dotnet tool restore (policy compiler)" \
 
 run_step "compile policy fragments -> dist/policies/*.xml" \
   dotnet azure-apim-policy-compiler \
-    --s ./src/Contoso.Apis.Policies \
+    --s ./src/Contoso.Apis.Policies/Documents \
     --o ./dist/policies \
     --format true || overall=1
 
@@ -99,6 +100,17 @@ else
   run_step "openapi breaking-change diff" \
     bash scripts/openapi-diff.sh "${BASELINE_REF:-origin/main}" || overall=1
 fi
+
+# --- 6. Merge policies into APIOps artifacts --------------------------------
+run_step "merge policies -> apim-artifacts/" \
+  pwsh scripts/merge-policies-to-apiops.ps1 \
+    -ArtifactsPath ./apim-artifacts \
+    -DistPath ./dist/policies || overall=1
+
+# NOTE: Smoke tests (tests/Contoso.Apis.SmokeTests) are NOT included here.
+# They require a live APIM gateway and run post-deployment:
+#   - Locally:  ./infra/deploy-local.ps1 -DeployPolicies -RunSmokeTests
+#   - CI:       after APIOps publishes to the target environment
 
 # --- Summary ----------------------------------------------------------------
 echo

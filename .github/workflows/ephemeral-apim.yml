@@ -62,6 +62,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy APIM (Bicep)
+        id: deploy
         uses: azure/arm-deploy@v2
         with:
           scope: resourcegroup
@@ -72,6 +73,30 @@ jobs:
             location=${{ env.LOCATION }}
             publisherEmail=apis@contoso.example
             publisherName="Contoso APIs"
+
+      # TODO: Run APIOps publisher here to deploy APIs, policies, named values
+      # from apim-artifacts/ with configuration.$ENV.yaml overlay.
+
+      - name: Run smoke tests
+        if: success()
+        env:
+          APIM_GATEWAY_URL: https://${{ env.APIM_NAME }}.azure-api.net
+          # Subscription keys are resolved by the deploy script or APIOps.
+          # For ephemeral envs, seed APIs + keys before this step.
+          # APIM_SUBSCRIPTION_KEY__ECHO_API: ${{ steps.seed-apis.outputs.echo-key }}
+          # APIM_SUBSCRIPTION_KEY__PETSTORE: ${{ steps.seed-apis.outputs.petstore-key }}
+        run: |
+          dotnet test tests/Contoso.Apis.SmokeTests/Contoso.Apis.SmokeTests.csproj \
+            -c Release --nologo \
+            --logger 'trx;LogFileName=smoke-results.trx'
+        continue-on-error: true  # don't block PR on smoke failures during preview
+
+      - name: Upload smoke test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-results
+          path: '**/TestResults/smoke-results.trx'
 
       - name: Comment on PR
         uses: actions/github-script@v7

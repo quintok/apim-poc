@@ -1,0 +1,8 @@
+{
+  "properties": {
+    "displayName": "List pets",
+    "method": "GET",
+    "urlTemplate": "/pets",
+    "description": "List pets with optional limit parameter."
+  }
+}

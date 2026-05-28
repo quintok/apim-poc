@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/apiops/main/configuration.schema.json
+#
+# APIOps environment overrides for PROD.
+#
+apimServiceName: $(apimServiceName)
+
+namedValues:
+  - name: auth0-tenant-domain
+    properties:
+      value: contoso.auth0.com
+  - name: auth0-audience
+    properties:
+      value: https://api.contoso.example
+
+apis:
+  - name: petstore
+    properties:
+      serviceUrl: https://petstore-backend.contoso.example

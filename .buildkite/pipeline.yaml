@@ -10,7 +10,7 @@ steps:
       - "dotnet restore APIMPolicies.sln"
       - "dotnet tool restore"
       - "dotnet build APIMPolicies.sln -c Release --no-restore"
-      - "dotnet test APIMPolicies.sln -c Release --no-build --logger 'trx;LogFileName=test-results.trx'"
+      - "dotnet test APIMPolicies.sln -c Release --no-build --filter 'FullyQualifiedName!~SmokeTests' --logger 'trx;LogFileName=test-results.trx'"
     artifact_paths:
       - "**/TestResults/*.trx"
     plugins:
@@ -23,9 +23,9 @@ steps:
     depends_on: build-test
     command:
       - "dotnet tool restore"
-      - "dotnet azure-apim-policy-compiler --s ./src/Contoso.Apis.Policies --o ./dist/policies --format true"
+      - "dotnet azure-apim-policy-compiler --s ./src/Contoso.Apis.Policies/Documents --o ./dist/policies --format true"
     artifact_paths:
-      - "dist/policies/*.xml"
+      - "dist/policies/**/*.xml"
     plugins:
       - docker#v5.11.0:
           image: "mcr.microsoft.com/dotnet/sdk:8.0"
@@ -55,16 +55,50 @@ steps:
 
   - wait: ~
 
-  - label: ":package: Package policy artifacts"
-    key: package
+  - label: ":package: Merge policies into APIOps artifacts"
+    key: merge-apiops
     depends_on:
       - compile-policies
       - spectral
     command:
-      - "buildkite-agent artifact download 'dist/policies/*.xml' ./dist/policies/"
-      - "tar -czf apim-policies.tar.gz -C dist policies"
+      - "buildkite-agent artifact download 'dist/policies/**/*.xml' ."
+      - "pwsh ./scripts/merge-policies-to-apiops.ps1 -ArtifactsPath ./apim-artifacts -DistPath ./dist/policies"
+      - "tar -czf apim-artifacts.tar.gz -C . apim-artifacts"
     artifact_paths:
-      - "apim-policies.tar.gz"
+      - "apim-artifacts.tar.gz"
+      - "apim-artifacts/**/*"
+    plugins:
+      - docker#v5.11.0:
+          image: "mcr.microsoft.com/dotnet/sdk:8.0"
+          workdir: /workdir
 
   # Optional: trigger ephemeral APIM provisioning via GitHub Actions when a
   # PR is labelled `preview`. Implemented in `.github/workflows/`.
+
+  # ---------------------------------------------------------------------------
+  # Smoke tests — run after APIOps deploys to a live APIM gateway.
+  # These are NOT part of the offline build/test/lint pipeline. They execute
+  # against a real gateway and require APIM_GATEWAY_URL + subscription keys.
+  #
+  # In a full pipeline this step would:
+  #   1. Wait for APIOps publisher to finish deploying to the target env
+  #   2. Set APIM_GATEWAY_URL and per-API subscription key env vars
+  #   3. Run: dotnet test tests/Contoso.Apis.SmokeTests -c Release
+  #
+  # Example (uncomment and wire to your deploy step):
+  # ---------------------------------------------------------------------------
+  # - label: ":smoking: Smoke tests (post-deploy)"
+  #   key: smoke-tests
+  #   depends_on: deploy-apiops   # depends on your APIOps deploy step
+  #   command:
+  #     - "dotnet test tests/Contoso.Apis.SmokeTests/Contoso.Apis.SmokeTests.csproj -c Release --nologo --logger 'trx;LogFileName=smoke-results.trx'"
+  #   env:
+  #     APIM_GATEWAY_URL: "${APIM_GATEWAY_URL}"
+  #     APIM_SUBSCRIPTION_KEY__ECHO_API: "${APIM_SUBSCRIPTION_KEY__ECHO_API}"
+  #     APIM_SUBSCRIPTION_KEY__PETSTORE: "${APIM_SUBSCRIPTION_KEY__PETSTORE}"
+  #   artifact_paths:
+  #     - "**/TestResults/smoke-results.trx"
+  #   plugins:
+  #     - docker#v5.11.0:
+  #         image: "mcr.microsoft.com/dotnet/sdk:8.0"
+  #         workdir: /workdir

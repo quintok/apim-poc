@@ -1,0 +1,18 @@
+{
+  "// NOTE": "Copy to local.settings.json (gitignored) for `func start`. Real deployments load from Function App settings (set by infra/main.bicep).",
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "Auth0__Domain": "your-tenant.auth0.com",
+    "Auth0__Audience": "https://api.contoso.example",
+    "Auth0__ClientId": "<auth0-app-client-id>",
+    "Auth0__ClientSecret": "<auth0-app-client-secret>",
+    "Auth0__ClockSkewSeconds": "60",
+    "Apim__ServiceName": "contoso-apim-dev",
+    "Apim__ResourceId": "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.ApiManagement/service/contoso-apim-dev",
+    "Apim__PortalUrl": "https://contoso-apim-dev.developer.azure-api.net",
+    "Apim__DelegationValidationKey": "<base64-validation-key>",
+    "State__LifetimeSeconds": "600"
+  }
+}

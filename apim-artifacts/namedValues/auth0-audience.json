@@ -1,0 +1,8 @@
+{
+  "properties": {
+    "displayName": "auth0-audience",
+    "value": "",
+    "secret": false,
+    "tags": ["auth0"]
+  }
+}

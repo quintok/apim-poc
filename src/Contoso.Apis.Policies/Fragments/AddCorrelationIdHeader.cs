@@ -1,4 +1,4 @@
-using Microsoft.Azure.ApiManagement.PolicyToolkit.Authoring;
+using Azure.ApiManagement.PolicyToolkit.Authoring;
 
 namespace Contoso.Apis.Policies.Fragments;
 
@@ -8,43 +8,37 @@ namespace Contoso.Apis.Policies.Fragments;
 /// echoed back on the response so clients can stitch their telemetry
 /// together with ours.
 ///
-/// This is NOT a full policy document — it has no <c>[Document]</c>
-/// attribute and is therefore not emitted as an XML file by the compiler.
-/// Instead, the static helpers below are invoked from inside a real
-/// <c>IDocument</c> (see <see cref="Documents.PetstoreApiPolicy"/>) so the
-/// same logic can be shared across many APIs without duplication.
-///
-/// Add new fragments alongside this file (one fragment per file) and
-/// expose them via static <c>Apply*</c> methods that take the relevant
-/// section context.
+/// <para>
+/// ⚠️ <b>Toolkit v1.0.0 limitation.</b> The original template assumed that
+/// <c>[Document]</c> classes could compose behaviour by invoking the static
+/// <c>Apply*</c> methods below. The v1.0.0 compiler rejects that pattern
+/// (error <c>APIM9991: Method 'ApplyXxx' not supported in policy document</c>)
+/// and silently drops the call from the emitted XML. To reuse policy logic
+/// across documents today you have two options:
+/// </para>
+/// <list type="number">
+///   <item>
+///     <b>Inline.</b> Copy the body of the relevant <c>Apply*</c> method into
+///     each <c>[Document]</c> that needs it (what <see cref="Documents.PetstoreApiPolicy"/>
+///     currently does). Cheap; no shared deployment artefact; OK for small
+///     amounts of logic.
+///   </item>
+///   <item>
+///     <b>Real APIM Policy Fragments.</b> Author the snippet as its own
+///     <c>[Document]</c>, deploy it as an APIM Policy Fragment resource
+///     (Bicep / APIOps), and reference it from documents via
+///     <c>context.IncludeFragment("add-correlation-id-header")</c>. This is
+///     the gateway-native composition model.
+///   </item>
+/// </list>
+/// <para>
+/// The <c>HeaderName</c> constant below is still useful (shared by callers
+/// and tests) so this class is intentionally retained as a thin helper.
+/// </para>
 /// </summary>
 public static class AddCorrelationIdHeader
 {
     /// <summary>Header name used both inbound and outbound.</summary>
     public const string HeaderName = "x-correlation-id";
-
-    /// <summary>
-    /// Inbound: keep an existing correlation id if the caller supplied
-    /// one, otherwise mint one from the gateway request id so downstream
-    /// services always see a value.
-    /// </summary>
-    public static void ApplyInbound(IInboundContext context)
-    {
-        // The toolkit translates this to:
-        //   <set-header name="x-correlation-id" exists-action="skip">
-        //     <value>@(context.Request.Headers.GetValueOrDefault("x-correlation-id", context.RequestId))</value>
-        //   </set-header>
-        context.SetHeader(
-            HeaderName,
-            $"@(context.Request.Headers.GetValueOrDefault(\"{HeaderName}\", context.RequestId))");
-    }
-
-    /// <summary>Outbound: echo the correlation id back to the client.</summary>
-    public static void ApplyOutbound(IOutboundContext context)
-    {
-        context.SetHeader(
-            HeaderName,
-            $"@(context.Request.Headers.GetValueOrDefault(\"{HeaderName}\", context.RequestId))");
-    }
 }
 

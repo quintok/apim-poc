@@ -1,0 +1,874 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.43.8.12551",
+      "templateHash": "5487736632968664435"
+    }
+  },
+  "parameters": {
+    "apimName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 50,
+      "metadata": {
+        "description": "Name of the APIM instance. 1-50 chars, globally unique."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for the APIM instance."
+      }
+    },
+    "publisherEmail": {
+      "type": "string",
+      "metadata": {
+        "description": "Publisher email shown in the developer portal & sent admin notifications."
+      }
+    },
+    "publisherName": {
+      "type": "string",
+      "metadata": {
+        "description": "Publisher organisation name shown in the developer portal."
+      }
+    },
+    "sku": {
+      "type": "string",
+      "defaultValue": "Premium",
+      "allowedValues": [
+        "Developer",
+        "Basic",
+        "BasicV2",
+        "Standard",
+        "StandardV2",
+        "Premium",
+        "PremiumV2"
+      ],
+      "metadata": {
+        "description": "APIM SKU. Use `Premium` or `PremiumV2` (where GA) for production. `Developer` is the cheapest and is ideal for ephemeral PR environments. `StandardV2` / `BasicV2` are the v2 platform tiers."
+      }
+    },
+    "capacity": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "maxValue": 12,
+      "metadata": {
+        "description": "Number of scale units. Premium supports >1."
+      }
+    },
+    "virtualNetworkType": {
+      "type": "string",
+      "defaultValue": "Internal",
+      "allowedValues": [
+        "None",
+        "External",
+        "Internal"
+      ],
+      "metadata": {
+        "description": "VNet integration mode. `None` for ephemeral PR environments, `Internal` for production."
+      }
+    },
+    "subnetResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of the subnet to delegate APIM into. Required when virtualNetworkType != None."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {
+        "workload": "apim-policy-pipeline",
+        "managedBy": "bicep"
+      },
+      "metadata": {
+        "description": "Tags applied to every resource."
+      }
+    },
+    "auth0TenantDomain": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Auth0 tenant domain WITHOUT scheme/trailing slash, e.g. `contoso.auth0.com`. Empty disables the named values that the validate-auth0-jwt policy fragment depends on."
+      }
+    },
+    "auth0Audience": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Auth0 API Identifier (audience) the access tokens must be issued for, e.g. `https://api.contoso.example`. Required when auth0TenantDomain is set."
+      }
+    },
+    "enableDelegation": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Deploy the developer portal delegation infrastructure (Key Vault, App Service shell, portalsettings/delegation). The handler code itself is BYO — see README."
+      }
+    },
+    "delegationHandlerUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Public URL of the delegation handler. When empty AND enableDelegation=true the URL of the provisioned App Service is used."
+      }
+    },
+    "delegationValidationKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Hex/base64 validation key APIM uses to HMAC-SHA512-sign delegation request parameters. Generate with: `openssl rand -base64 48`. Stored in Key Vault, not in resource properties."
+      }
+    },
+    "auth0ClientId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Auth0 application client ID (a public value — NOT a secret). Required when enableDelegation=true."
+      }
+    },
+    "auth0ClientSecret": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Auth0 application client secret. Stored in Key Vault; referenced by the Function App as a Key Vault reference."
+      }
+    },
+    "delegationHandlerMaxInstances": {
+      "type": "int",
+      "defaultValue": 100,
+      "minValue": 40,
+      "maxValue": 1000,
+      "metadata": {
+        "description": "Maximum number of Flex Consumption instances. Default 100 (the platform max for FC1)."
+      }
+    },
+    "delegationHandlerInstanceMemoryMB": {
+      "type": "int",
+      "defaultValue": 2048,
+      "allowedValues": [
+        512,
+        2048,
+        4096
+      ],
+      "metadata": {
+        "description": "Instance memory (MB) for the Flex Consumption plan. Allowed values per platform: 512, 2048, 4096."
+      }
+    },
+    "enableObservability": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Deploy Log Analytics workspace + Application Insights + diagnostic settings for APIM, KV, Storage, and the Function App. Required for the handler code’s Application Insights telemetry to actually flow."
+      }
+    },
+    "logRetentionDays": {
+      "type": "int",
+      "defaultValue": 30,
+      "minValue": 30,
+      "maxValue": 730,
+      "metadata": {
+        "description": "Log Analytics workspace retention in days (Pay-As-You-Go: 30-730)."
+      }
+    },
+    "keyVaultPurgeProtection": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable Key Vault purge protection. Once on it CANNOT be turned off for the lifetime of the vault. Strongly recommended for production."
+      }
+    },
+    "keyVaultSoftDeleteRetentionDays": {
+      "type": "int",
+      "defaultValue": 7,
+      "minValue": 7,
+      "maxValue": 90,
+      "metadata": {
+        "description": "Key Vault soft-delete retention in days. 7-90."
+      }
+    },
+    "delegationStorageSku": {
+      "type": "string",
+      "defaultValue": "Standard_LRS",
+      "allowedValues": [
+        "Standard_LRS",
+        "Standard_ZRS",
+        "Standard_GZRS",
+        "Standard_RAGRS"
+      ],
+      "metadata": {
+        "description": "Storage account redundancy. Standard_LRS for dev, Standard_ZRS or Standard_GZRS for production single-region / geo HA."
+      }
+    },
+    "useCustomApimRole": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Deploy a custom least-privilege role definition (users/read + users/write + users/token/action) and assign that to the handler MI instead of the broad `API Management Service Contributor`. Requires Microsoft.Authorization/roleDefinitions/write at the subscription scope."
+      }
+    }
+  },
+  "variables": {
+    "kvName": "[take(toLower(replace(format('{0}-deleg-kv', parameters('apimName')), '_', '-')), 24)]",
+    "storageAccountName": "[take(toLower(replace(replace(format('{0}deleg', parameters('apimName')), '-', ''), '_', '')), 24)]",
+    "deploymentContainerName": "function-deployment",
+    "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6",
+    "apimServiceContributorRoleId": "312a565d-c81f-4fd8-895a-4e21e48d571c",
+    "storageBlobDataOwnerRoleId": "b7e6dc6d-f1e8-4753-8033-0f276bb0955b",
+    "storageQueueDataContribRole": "974c5e8b-45b9-4653-ba55-5f855dd0fb88",
+    "storageTableDataContribRole": "0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3"
+  },
+  "resources": [
+    {
+      "condition": "[parameters('enableObservability')]",
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}-law', parameters('apimName'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": "[parameters('logRetentionDays')]",
+        "features": {
+          "enableLogAccessUsingOnlyResourcePermissions": true
+        },
+        "publicNetworkAccessForIngestion": "Enabled",
+        "publicNetworkAccessForQuery": "Enabled"
+      }
+    },
+    {
+      "condition": "[parameters('enableObservability')]",
+      "type": "Microsoft.Insights/components",
+      "apiVersion": "2020-02-02",
+      "name": "[format('{0}-ai', parameters('apimName'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "web",
+      "properties": {
+        "Application_Type": "web",
+        "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', parameters('apimName')))]",
+        "IngestionMode": "LogAnalytics",
+        "publicNetworkAccessForIngestion": "Enabled",
+        "publicNetworkAccessForQuery": "Enabled",
+        "DisableLocalAuth": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', parameters('apimName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.ApiManagement/service",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[parameters('apimName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "[parameters('sku')]",
+        "capacity": "[parameters('capacity')]"
+      },
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "publisherEmail": "[parameters('publisherEmail')]",
+        "publisherName": "[parameters('publisherName')]",
+        "virtualNetworkType": "[parameters('virtualNetworkType')]",
+        "virtualNetworkConfiguration": "[if(equals(parameters('virtualNetworkType'), 'None'), null(), createObject('subnetResourceId', parameters('subnetResourceId')))]",
+        "customProperties": {
+          "Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.TLS10": "false",
+          "Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.TLS11": "false",
+          "Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Tls10": "false",
+          "Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Tls11": "false",
+          "Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Ssl30": "false",
+          "Microsoft.WindowsAzure.ApiManagement.Gateway.Protocols.Server.Http2": "true"
+        },
+        "publicNetworkAccess": "[if(equals(parameters('virtualNetworkType'), 'Internal'), 'Disabled', 'Enabled')]"
+      }
+    },
+    {
+      "condition": "[parameters('enableObservability')]",
+      "type": "Microsoft.ApiManagement/service/loggers",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), 'applicationinsights')]",
+      "properties": {
+        "loggerType": "applicationInsights",
+        "description": "Workspace-based Application Insights",
+        "resourceId": "[resourceId('Microsoft.Insights/components', format('{0}-ai', parameters('apimName')))]",
+        "credentials": {
+          "connectionString": "[reference(resourceId('Microsoft.Insights/components', format('{0}-ai', parameters('apimName'))), '2020-02-02').ConnectionString]"
+        },
+        "isBuffered": true
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "[resourceId('Microsoft.Insights/components', format('{0}-ai', parameters('apimName')))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableObservability')]",
+      "type": "Microsoft.ApiManagement/service/diagnostics",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), 'applicationinsights')]",
+      "properties": {
+        "loggerId": "[resourceId('Microsoft.ApiManagement/service/loggers', parameters('apimName'), 'applicationinsights')]",
+        "alwaysLog": "allErrors",
+        "sampling": {
+          "samplingType": "fixed",
+          "percentage": 100
+        },
+        "httpCorrelationProtocol": "W3C",
+        "verbosity": "information",
+        "logClientIp": true,
+        "frontend": {
+          "request": {
+            "headers": [
+              "x-correlation-id"
+            ]
+          },
+          "response": {}
+        },
+        "backend": {
+          "request": {},
+          "response": {}
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "[resourceId('Microsoft.ApiManagement/service/loggers', parameters('apimName'), 'applicationinsights')]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableObservability')]",
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+      "name": "to-log-analytics",
+      "properties": {
+        "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', parameters('apimName')))]",
+        "logs": [
+          {
+            "categoryGroup": "allLogs",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', parameters('apimName')))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableDelegation')]",
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('kvName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "tenantId": "[subscription().tenantId]",
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "enableRbacAuthorization": true,
+        "enableSoftDelete": true,
+        "softDeleteRetentionInDays": "[parameters('keyVaultSoftDeleteRetentionDays')]",
+        "enablePurgeProtection": "[if(parameters('keyVaultPurgeProtection'), true(), null())]",
+        "publicNetworkAccess": "Enabled",
+        "networkAcls": {
+          "defaultAction": "Allow",
+          "bypass": "AzureServices"
+        }
+      }
+    },
+    {
+      "condition": "[and(parameters('enableDelegation'), parameters('enableObservability'))]",
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
+      "name": "to-log-analytics",
+      "properties": {
+        "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', parameters('apimName')))]",
+        "logs": [
+          {
+            "categoryGroup": "audit",
+            "enabled": true
+          },
+          {
+            "categoryGroup": "allLogs",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', parameters('apimName')))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableDelegation'), not(empty(parameters('delegationValidationKey'))))]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('kvName'), 'apim-delegation-validation-key')]",
+      "properties": {
+        "value": "[parameters('delegationValidationKey')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableDelegation'), not(empty(parameters('auth0ClientSecret'))))]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('kvName'), 'auth0-client-secret')]",
+      "properties": {
+        "value": "[parameters('auth0ClientSecret')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableDelegation')]",
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('storageAccountName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "[parameters('delegationStorageSku')]"
+      },
+      "kind": "StorageV2",
+      "properties": {
+        "minimumTlsVersion": "TLS1_2",
+        "allowBlobPublicAccess": false,
+        "allowSharedKeyAccess": false,
+        "publicNetworkAccess": "Enabled",
+        "supportsHttpsTrafficOnly": true
+      }
+    },
+    {
+      "condition": "[and(parameters('enableDelegation'), parameters('enableObservability'))]",
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('storageAccountName'), 'default')]",
+      "name": "to-log-analytics",
+      "properties": {
+        "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', parameters('apimName')))]",
+        "logs": [
+          {
+            "categoryGroup": "audit",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "Transaction",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('storageAccountName'), 'default')]",
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', parameters('apimName')))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableDelegation')]",
+      "type": "Microsoft.Storage/storageAccounts/blobServices",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', variables('storageAccountName'), 'default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableDelegation')]",
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', variables('storageAccountName'), 'default', variables('deploymentContainerName'))]",
+      "properties": {
+        "publicAccess": "None"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('storageAccountName'), 'default')]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableDelegation')]",
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2024-04-01",
+      "name": "[format('{0}-deleg-plan', parameters('apimName'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "tier": "FlexConsumption",
+        "name": "FC1"
+      },
+      "kind": "functionapp",
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "condition": "[parameters('enableDelegation')]",
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2024-04-01",
+      "name": "[format('{0}-deleg', parameters('apimName'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "functionapp,linux",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('{0}-deleg-plan', parameters('apimName')))]",
+        "httpsOnly": true,
+        "functionAppConfig": {
+          "deployment": {
+            "storage": {
+              "type": "blobContainer",
+              "value": "[format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-05-01').primaryEndpoints.blob, variables('deploymentContainerName'))]",
+              "authentication": {
+                "type": "SystemAssignedIdentity"
+              }
+            }
+          },
+          "runtime": {
+            "name": "dotnet-isolated",
+            "version": "8.0"
+          },
+          "scaleAndConcurrency": {
+            "maximumInstanceCount": "[parameters('delegationHandlerMaxInstances')]",
+            "instanceMemoryMB": "[parameters('delegationHandlerInstanceMemoryMB')]"
+          }
+        },
+        "siteConfig": {
+          "minTlsVersion": "1.2",
+          "ftpsState": "Disabled",
+          "http20Enabled": true,
+          "appSettings": [
+            {
+              "name": "AzureWebJobsStorage__accountName",
+              "value": "[variables('storageAccountName')]"
+            },
+            {
+              "name": "AzureWebJobsStorage__credential",
+              "value": "managedidentity"
+            },
+            {
+              "name": "Auth0__Domain",
+              "value": "[parameters('auth0TenantDomain')]"
+            },
+            {
+              "name": "Auth0__Audience",
+              "value": "[parameters('auth0Audience')]"
+            },
+            {
+              "name": "Auth0__ClientId",
+              "value": "[parameters('auth0ClientId')]"
+            },
+            {
+              "name": "Auth0__ClientSecret",
+              "value": "[if(and(parameters('enableDelegation'), not(empty(parameters('auth0ClientSecret')))), format('@Microsoft.KeyVault(SecretUri={0})', reference(resourceId('Microsoft.KeyVault/vaults/secrets', variables('kvName'), 'auth0-client-secret'), '2023-07-01').secretUri), '')]"
+            },
+            {
+              "name": "Apim__ServiceName",
+              "value": "[parameters('apimName')]"
+            },
+            {
+              "name": "Apim__ResourceId",
+              "value": "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+            },
+            {
+              "name": "Apim__PortalUrl",
+              "value": "[format('https://{0}.developer.azure-api.net', parameters('apimName'))]"
+            },
+            {
+              "name": "Apim__DelegationValidationKey",
+              "value": "[if(and(parameters('enableDelegation'), not(empty(parameters('delegationValidationKey')))), format('@Microsoft.KeyVault(SecretUri={0})', reference(resourceId('Microsoft.KeyVault/vaults/secrets', variables('kvName'), 'apim-delegation-validation-key'), '2023-07-01').secretUri), '')]"
+            },
+            {
+              "name": "Auth0__ClockSkewSeconds",
+              "value": "60"
+            },
+            {
+              "name": "State__LifetimeSeconds",
+              "value": "600"
+            },
+            {
+              "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+              "value": "[if(parameters('enableObservability'), reference(resourceId('Microsoft.Insights/components', format('{0}-ai', parameters('apimName'))), '2020-02-02').ConnectionString, '')]"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "[resourceId('Microsoft.Insights/components', format('{0}-ai', parameters('apimName')))]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('kvName'), 'auth0-client-secret')]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('kvName'), 'apim-delegation-validation-key')]",
+        "[resourceId('Microsoft.Web/serverfarms', format('{0}-deleg-plan', parameters('apimName')))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableDelegation'), parameters('enableObservability'))]",
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName')))]",
+      "name": "to-log-analytics",
+      "properties": {
+        "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', parameters('apimName')))]",
+        "logs": [
+          {
+            "categoryGroup": "allLogs",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName')))]",
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', parameters('apimName')))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableDelegation')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('kvName')), resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), variables('keyVaultSecretsUserRoleId'))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), '2024-04-01', 'full').identity.principalId]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
+        "[resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName')))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableDelegation')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), variables('storageBlobDataOwnerRoleId'))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), '2024-04-01', 'full').identity.principalId]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataOwnerRoleId'))]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName')))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableDelegation')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), variables('storageQueueDataContribRole'))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), '2024-04-01', 'full').identity.principalId]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageQueueDataContribRole'))]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName')))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableDelegation')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), variables('storageTableDataContribRole'))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), '2024-04-01', 'full').identity.principalId]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageTableDataContribRole'))]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName')))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableDelegation'), parameters('useCustomApimRole'))]",
+      "type": "Microsoft.Authorization/roleDefinitions",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+      "name": "[guid(subscription().id, resourceId('Microsoft.ApiManagement/service', parameters('apimName')), 'apim-user-sso-token-minter')]",
+      "properties": {
+        "roleName": "[format('APIM User SSO Token Minter ({0})', parameters('apimName'))]",
+        "description": "Least-privileged role for the delegation handler MI: read/write users and mint SSO tokens on a single APIM service.",
+        "type": "CustomRole",
+        "permissions": [
+          {
+            "actions": [
+              "Microsoft.ApiManagement/service/users/read",
+              "Microsoft.ApiManagement/service/users/write",
+              "Microsoft.ApiManagement/service/users/token/action"
+            ],
+            "notActions": [],
+            "dataActions": [],
+            "notDataActions": []
+          }
+        ],
+        "assignableScopes": [
+          "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableDelegation'), parameters('useCustomApimRole'))]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+      "name": "[guid(resourceId('Microsoft.ApiManagement/service', parameters('apimName')), resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), 'custom-apim-user-sso-token-minter')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), '2024-04-01', 'full').identity.principalId]",
+        "roleDefinitionId": "[extensionResourceId(resourceId('Microsoft.ApiManagement/service', parameters('apimName')), 'Microsoft.Authorization/roleDefinitions', guid(subscription().id, resourceId('Microsoft.ApiManagement/service', parameters('apimName')), 'apim-user-sso-token-minter'))]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "[extensionResourceId(resourceId('Microsoft.ApiManagement/service', parameters('apimName')), 'Microsoft.Authorization/roleDefinitions', guid(subscription().id, resourceId('Microsoft.ApiManagement/service', parameters('apimName')), 'apim-user-sso-token-minter'))]",
+        "[resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName')))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableDelegation'), not(parameters('useCustomApimRole')))]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+      "name": "[guid(resourceId('Microsoft.ApiManagement/service', parameters('apimName')), resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), variables('apimServiceContributorRoleId'))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), '2024-04-01', 'full').identity.principalId]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('apimServiceContributorRoleId'))]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "[resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName')))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableDelegation'), not(empty(parameters('delegationValidationKey'))))]",
+      "type": "Microsoft.ApiManagement/service/portalsettings",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), 'delegation')]",
+      "properties": {
+        "url": "[if(not(empty(parameters('delegationHandlerUrl'))), parameters('delegationHandlerUrl'), if(parameters('enableDelegation'), format('https://{0}/delegation', reference(resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), '2024-04-01').defaultHostName), ''))]",
+        "validationKey": "[parameters('delegationValidationKey')]",
+        "subscriptions": {
+          "enabled": true
+        },
+        "userRegistration": {
+          "enabled": true
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "[resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "apimResourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of the APIM service."
+      },
+      "value": "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+    },
+    "apimGatewayHostname": {
+      "type": "string",
+      "metadata": {
+        "description": "Default gateway hostname. Internal-mode APIM resolves only inside the VNet."
+      },
+      "value": "[reference(resourceId('Microsoft.ApiManagement/service', parameters('apimName')), '2023-05-01-preview').gatewayUrl]"
+    },
+    "apimPrincipalId": {
+      "type": "string",
+      "metadata": {
+        "description": "Principal ID of the system-assigned managed identity (use for Key Vault access policies etc.)."
+      },
+      "value": "[reference(resourceId('Microsoft.ApiManagement/service', parameters('apimName')), '2023-05-01-preview', 'full').identity.principalId]"
+    },
+    "developerPortalUrl": {
+      "type": "string",
+      "metadata": {
+        "description": "Developer portal URL."
+      },
+      "value": "[format('https://{0}.developer.azure-api.net', parameters('apimName'))]"
+    },
+    "delegationHandlerHostname": {
+      "type": "string",
+      "metadata": {
+        "description": "Default hostname of the (empty) delegation handler App Service. Deploy your handler code here."
+      },
+      "value": "[if(parameters('enableDelegation'), reference(resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), '2024-04-01').defaultHostName, '')]"
+    },
+    "delegationHandlerPrincipalId": {
+      "type": "string",
+      "metadata": {
+        "description": "Principal ID of the delegation handler’s managed identity."
+      },
+      "value": "[if(parameters('enableDelegation'), reference(resourceId('Microsoft.Web/sites', format('{0}-deleg', parameters('apimName'))), '2024-04-01', 'full').identity.principalId, '')]"
+    },
+    "delegationKeyVaultId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of the Key Vault holding the delegation validation key and Auth0 client secret."
+      },
+      "value": "[if(parameters('enableDelegation'), resourceId('Microsoft.KeyVault/vaults', variables('kvName')), '')]"
+    },
+    "logAnalyticsWorkspaceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of the Log Analytics workspace receiving diagnostic logs (empty when observability is disabled)."
+      },
+      "value": "[if(parameters('enableObservability'), resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', parameters('apimName'))), '')]"
+    },
+    "applicationInsightsId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of the Application Insights component used by APIM and the delegation handler (empty when observability is disabled)."
+      },
+      "value": "[if(parameters('enableObservability'), resourceId('Microsoft.Insights/components', format('{0}-ai', parameters('apimName'))), '')]"
+    }
+  }
+}

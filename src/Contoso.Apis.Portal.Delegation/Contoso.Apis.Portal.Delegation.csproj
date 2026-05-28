@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Contoso.Apis.Portal.Delegation</RootNamespace>
+    <AssemblyName>Contoso.Apis.Portal.Delegation</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <AzureFunctionsVersion>v4</AzureFunctionsVersion>
+    <IsPackable>false</IsPackable>
+    <!--
+      Generated Functions worker startup code triggers a handful of
+      analyzer warnings the toolkit ships with (mostly underscored helper
+      names from the source generator). Solution-wide
+      TreatWarningsAsErrors stays on; we only suppress the specific IDs.
+    -->
+    <NoWarn>$(NoWarn);CA1707;CA1822;CA2007;IDE0058</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Functions worker (.NET 8 isolated) with ASP.NET Core integration for HTTP. -->
+    <PackageReference Include="Microsoft.Azure.Functions.Worker" Version="2.0.0" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.Sdk" Version="2.0.5" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Http.AspNetCore" Version="2.0.0" />
+    <PackageReference Include="Microsoft.ApplicationInsights.WorkerService" Version="2.22.0" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.ApplicationInsights" Version="2.0.0" />
+
+    <!-- Azure AD token for calling APIM REST via the Function App's MI. -->
+    <PackageReference Include="Azure.Identity" Version="1.13.1" />
+
+    <!-- ID token validation against Auth0's JWKS. -->
+    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.0.2" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.0.2" />
+
+    <!-- Bind IConfiguration into options classes. -->
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
+
+    <!-- Standard transient-fault handling (retry + timeout + circuit-breaker)
+         for the Auth0 + APIM REST HttpClients. Replaces hand-rolled Polly. -->
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="8.10.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="host.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="local.settings.json.example">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
