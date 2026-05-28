@@ -45,8 +45,7 @@ public abstract class SmokeTestBase : IDisposable
         gatewayUrl = gatewayUrl.TrimEnd('/');
         BaseUrl = $"{gatewayUrl}/{ApiPath}";
 
-        var envKey = $"APIM_SUBSCRIPTION_KEY__{ApiId.ToUpperInvariant().Replace('-', '_')}";
-        var subscriptionKey = Environment.GetEnvironmentVariable(envKey);
+        var subscriptionKey = Environment.GetEnvironmentVariable("APIM_SUBSCRIPTION_KEY");
 
         Client = new HttpClient { BaseAddress = new Uri(BaseUrl + "/") };
         Client.Timeout = TimeSpan.FromSeconds(30);
