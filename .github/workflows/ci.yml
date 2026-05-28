@@ -76,10 +76,10 @@ jobs:
 
       - name: Merge policies into APIOps artifacts
         shell: pwsh
-        run: |
-          ./scripts/merge-policies-to-apiops.ps1 \
-            -ArtifactsPath ./apim-artifacts \
-            -DistPath ./dist/policies
+        run: >-
+          ./scripts/merge-policies-to-apiops.ps1
+          -ArtifactsPath ./apim-artifacts
+          -DistPath ./dist/policies
 
       - name: Upload APIOps artifacts
         uses: actions/upload-artifact@v4
