@@ -1,7 +1,0 @@
-{
-  "properties": {
-    "displayName": "Petstore API Test Subscription",
-    "scope": "/apis/petstore",
-    "state": "active"
-  }
-}

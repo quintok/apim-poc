@@ -22,16 +22,16 @@ needed to deploy their API via APIOps — and creates a PR when done.
 
 This repo uses:
 - **Azure APIM Policy Toolkit** — policies authored in C#, compiled to XML
-- **APIOps** — deploys APIs, policies, subscriptions, named values to APIM
+- **APIOps** (v7+) — deploys APIs, policies, subscriptions, named values to APIM using a spec-driven model
 - **Three environments** — dev, sit, prod (controlled via `apim-artifacts/configuration.<env>.yaml`)
 - **C# xUnit smoke tests** — post-deployment verification owned by API teams
 - **Buildkite + GitHub Actions CI** — build, test, compile, merge, deploy
 
 Key folders:
-- `openapi/` — OpenAPI specs
-- `apim-artifacts/apis/<api-id>/` — APIOps API definition + operations
+- `openapi/` — OpenAPI specs (canonical source for linting & breaking-change detection)
+- `apim-artifacts/apis/<api-id>/` — APIOps API artifacts (`apiInformation.json` + `specification.yaml`)
 - `apim-artifacts/configuration.{dev,sit,prod}.yaml` — per-environment overrides
-- `src/Contoso.Apis.Policies/Documents/` — C# policy documents
+- `src/Contoso.Apis.Policies/Documents/` — C# policy documents (only for APIs with custom policies)
 - `tests/Contoso.Apis.Policies.Tests/` — policy unit tests
 - `tests/Contoso.Apis.SmokeTests/` — post-deployment smoke tests
 
@@ -65,20 +65,47 @@ Ask the user for:
 
 ### Step 3: Create APIOps Artifacts
 
+APIOps uses a **spec-driven** model — operations are defined by the OpenAPI spec,
+not individual `operationInformation.json` files.
+
 Create the following files:
 
 ```
 apim-artifacts/apis/<api-id>/
-├── apiInformation.json          # displayName, path, protocols, serviceUrl, subscriptionRequired
-└── operations/
-    └── <operationId>/
-        └── operationInformation.json   # displayName, method, urlTemplate, description
+├── apiInformation.json     # APIM metadata: displayName, path, protocols, serviceUrl, subscriptionRequired, apiRevision, apiType
+└── specification.yaml      # OpenAPI spec — copied from openapi/<api-id>.yaml
+```
+
+**Do NOT create an `operations/` folder** unless the API needs per-operation policies.
+If per-operation policies are needed, create only the policy file:
+```
+apim-artifacts/apis/<api-id>/operations/<operationId>/policy.xml
 ```
 
 Also create a test subscription:
 ```
 apim-artifacts/subscriptions/<api-id>-test-sub.json
 ```
+
+#### `apiInformation.json` Template
+```json
+{
+  "properties": {
+    "displayName": "<API Display Name>",
+    "description": "<description>",
+    "path": "<api-path>",
+    "apiRevision": "1",
+    "protocols": ["https"],
+    "subscriptionRequired": true,
+    "serviceUrl": "<default-backend-url>",
+    "apiType": "http"
+  }
+}
+```
+
+#### Revisions and Versions
+- **Revisions**: create a sibling folder with `;rev=N` suffix (e.g. `apis/<api-id>;rev=2/`) containing its own `apiInformation.json` and `specification.yaml`
+- **Versions**: use version sets + separate API folders (e.g. `apis/<api-id>-v1/`, `apis/<api-id>-v2/`)
 
 ### Step 4: Configure Environment Overrides
 
@@ -91,10 +118,16 @@ the user about the `COMMIT_ID`-based incremental deploy model and that they can
 simply not include the API folder until ready — or use the APIOps configuration
 to override properties per environment.
 
-### Step 5: Create the C# Policy Document (if needed)
+### Step 5: Create the C# Policy Document (only if needed)
 
-If the API needs custom policies (JWT validation, rate limiting, caching, header
-transforms, etc.):
+**Most APIs do NOT need a policy document.** APIM applies the global policy (correlation-id,
+base behavior) automatically. Only create a C# policy document if the API needs
+custom behavior like JWT validation, rate limiting, caching, or header transforms.
+
+**Do NOT create an empty/no-op policy** that just calls `context.Base()` — this is
+unnecessary since APIM applies base policies by default.
+
+If custom policies are needed:
 
 1. Create `src/Contoso.Apis.Policies/Documents/<ApiName>ApiPolicy.cs`
    - Use `[Document("apis/<api-id>/policy.xml")]`
@@ -103,9 +136,6 @@ transforms, etc.):
 2. Create a corresponding unit test in `tests/Contoso.Apis.Policies.Tests/`
 3. Explain that the compiled XML will be merged into `apim-artifacts/apis/<api-id>/policy.xml`
    automatically by CI via `scripts/merge-policies-to-apiops.ps1`
-
-If the API only needs the global policy (correlation-id), no policy document is
-needed — the API inherits it via `context.Base()` from the default policy.
 
 ### Step 6: Create Smoke Tests
 

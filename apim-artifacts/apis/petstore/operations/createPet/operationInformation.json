@@ -1,8 +1,0 @@
-{
-  "properties": {
-    "displayName": "Create a pet",
-    "method": "POST",
-    "urlTemplate": "/pets",
-    "description": "Create a new pet."
-  }
-}

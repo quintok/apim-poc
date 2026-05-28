@@ -10,8 +10,7 @@ using Xunit;
 ///
 /// The correlation-id logic now lives in <see cref="GlobalPolicy"/> (the
 /// service-level policy applied to all APIs). These tests verify that the
-/// global document sets the header, and that <see cref="PetstoreApiPolicy"/>
-/// no longer duplicates it.
+/// global document sets the header.
 /// </summary>
 public class AddCorrelationIdHeaderTests
 {
@@ -35,18 +34,6 @@ public class AddCorrelationIdHeaderTests
         Assert.True(
             test.Context.Response.Headers.ContainsKey(AddCorrelationIdHeader.HeaderName),
             $"expected response header '{AddCorrelationIdHeader.HeaderName}' to be set by global outbound policy");
-    }
-
-    [Fact]
-    public void PetstoreApiPolicy_Inbound_DoesNotSetCorrelationIdHeader()
-    {
-        // PetstoreApiPolicy delegates correlation-id to the global policy via context.Base().
-        var test = new TestDocument(new PetstoreApiPolicy());
-        test.RunInbound();
-
-        Assert.False(
-            test.Context.Request.Headers.ContainsKey(AddCorrelationIdHeader.HeaderName),
-            $"PetstoreApiPolicy should NOT set '{AddCorrelationIdHeader.HeaderName}' — global policy owns it");
     }
 }
 

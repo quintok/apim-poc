@@ -1,6 +1,0 @@
-{
-  "properties": {
-    "description": "Validates Auth0 JWT tokens (compiled from C# via Policy Toolkit)",
-    "format": "xml"
-  }
-}

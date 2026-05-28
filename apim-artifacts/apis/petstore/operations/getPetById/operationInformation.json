@@ -1,8 +1,0 @@
-{
-  "properties": {
-    "displayName": "Get a pet by ID",
-    "method": "GET",
-    "urlTemplate": "/pets/{petId}",
-    "description": "Retrieve a single pet by its unique identifier."
-  }
-}

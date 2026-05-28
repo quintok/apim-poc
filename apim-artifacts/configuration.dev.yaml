@@ -21,3 +21,6 @@ apis:
   - name: petstore
     properties:
       serviceUrl: https://echoapi.cloudapp.net/api
+  - name: animalstore
+    properties:
+      serviceUrl: https://echoapi.cloudapp.net/api

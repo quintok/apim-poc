@@ -1,0 +1,12 @@
+{
+  "properties": {
+    "displayName": "Animalstore API",
+    "description": "Minimal example API used to exercise the policy compilation pipeline.",
+    "path": "animalstore",
+    "apiRevision": "1",
+    "protocols": ["https"],
+    "subscriptionRequired": true,
+    "serviceUrl": "https://echoapi.cloudapp.net/api",
+    "apiType": "http"
+  }
+}
