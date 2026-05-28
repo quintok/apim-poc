@@ -1,36 +1,43 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-  Merges compiled Policy Toolkit XML from dist/policies/ into the APIOps
-  artifact tree (apim-artifacts/).
+  Copies the APIOps artifact tree to a build output directory, then merges
+  compiled Policy Toolkit XML from dist/policies/ into the copy.
+
+  The source apim-artifacts/ folder is NEVER modified — all generated files
+  go into the build output (default: dist/apim-artifacts/).
 
   APIOps expects a specific folder layout. The Policy Toolkit compiles C#
   documents to a flat XML structure. This script bridges the two:
 
-    dist/policies/global-policy.xml           → apim-artifacts/policy.xml
-    dist/policies/apis/<id>/policy.xml        → apim-artifacts/apis/<id>/policy.xml
-    dist/policies/fragments/<name>.xml        → apim-artifacts/fragments/<name>/policy.xml
+    dist/policies/global-policy.xml           → <output>/policy.xml
+    dist/policies/apis/<id>/policy.xml        → <output>/apis/<id>/policy.xml
+    dist/policies/fragments/<name>.xml        → <output>/fragments/<name>/policy.xml
 
   Run this AFTER `dotnet azure-apim-policy-compiler` and BEFORE the APIOps
-  publisher. The APIOps artifact tree must already exist (from `apiops extract`
-  or committed baseline).
+  publisher. Point the publisher at the output directory.
 
 .EXAMPLE
   # Typical CI flow:
   dotnet azure-apim-policy-compiler --s src/Contoso.Apis.Policies/Documents --o dist/policies --format true
   ./scripts/merge-policies-to-apiops.ps1
-  # Then run APIOps publisher against apim-artifacts/
+  # Then run APIOps publisher against dist/apim-artifacts/
 
 .PARAMETER ArtifactsPath
-  Root of the APIOps artifact tree. Default: ./apim-artifacts
+  Root of the source APIOps artifact tree (read-only). Default: ./apim-artifacts
 
 .PARAMETER DistPath
   Root of the compiled policy XML. Default: ./dist/policies
+
+.PARAMETER OutputPath
+  Root of the build output directory. Default: ./dist/apim-artifacts
+  The source artifact tree is copied here, then policies are merged in.
 #>
 [CmdletBinding()]
 param(
     [string]$ArtifactsPath = './apim-artifacts',
-    [string]$DistPath      = './dist/policies'
+    [string]$DistPath      = './dist/policies',
+    [string]$OutputPath    = './dist/apim-artifacts'
 )
 
 Set-StrictMode -Version Latest
@@ -42,16 +49,23 @@ if (-not (Test-Path $DistPath)) {
 }
 
 if (-not (Test-Path $ArtifactsPath)) {
-    Write-Warning "APIOps artifact tree not found at '$ArtifactsPath'. Creating it."
-    New-Item -ItemType Directory -Path $ArtifactsPath -Force | Out-Null
+    Write-Error "APIOps artifact tree not found at '$ArtifactsPath'."
+    exit 1
 }
+
+# --- Copy source artifacts to build output ----------------------------------
+if (Test-Path $OutputPath) {
+    Remove-Item -Recurse -Force $OutputPath
+}
+Copy-Item -Recurse -Force $ArtifactsPath $OutputPath
+Write-Host "  Copied $ArtifactsPath -> $OutputPath"
 
 $count = 0
 
 # --- Global policy ----------------------------------------------------------
 $globalSrc = Join-Path $DistPath 'global-policy.xml'
 if (Test-Path $globalSrc) {
-    $globalDst = Join-Path $ArtifactsPath 'policy.xml'
+    $globalDst = Join-Path $OutputPath 'policy.xml'
     Copy-Item $globalSrc $globalDst -Force
     Write-Host "  global-policy.xml -> policy.xml"
     $count++
@@ -61,7 +75,7 @@ if (Test-Path $globalSrc) {
 $apiPolicies = Get-ChildItem -Path (Join-Path $DistPath 'apis') -Filter 'policy.xml' -Recurse -ErrorAction SilentlyContinue
 foreach ($f in $apiPolicies) {
     $apiId = $f.Directory.Name
-    $dstDir = Join-Path $ArtifactsPath "apis/$apiId"
+    $dstDir = Join-Path $OutputPath "apis/$apiId"
     if (-not (Test-Path $dstDir)) {
         Write-Warning "  API folder '$dstDir' does not exist in artifact tree — creating it."
         New-Item -ItemType Directory -Path $dstDir -Force | Out-Null
@@ -77,7 +91,7 @@ foreach ($f in $apiPolicies) {
 $fragments = Get-ChildItem -Path (Join-Path $DistPath 'fragments') -Filter '*.xml' -ErrorAction SilentlyContinue
 foreach ($f in $fragments) {
     $fragName = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
-    $dstDir = Join-Path $ArtifactsPath "fragments/$fragName"
+    $dstDir = Join-Path $OutputPath "fragments/$fragName"
     if (-not (Test-Path $dstDir)) {
         New-Item -ItemType Directory -Path $dstDir -Force | Out-Null
     }
@@ -108,4 +122,4 @@ foreach ($f in $fragments) {
 }
 
 Write-Host ""
-Write-Host "Merged $count policy file(s) into $ArtifactsPath" -ForegroundColor Green
+Write-Host "Merged $count policy file(s) into $OutputPath" -ForegroundColor Green

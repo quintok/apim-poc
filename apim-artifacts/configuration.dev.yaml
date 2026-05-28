@@ -24,3 +24,8 @@ apis:
   - name: animalstore
     properties:
       serviceUrl: https://echoapi.cloudapp.net/api
+      isCurrent: false
+  - name: "animalstore;rev=2"
+    properties:
+      serviceUrl: https://echoapi.cloudapp.net/api
+      isCurrent: true

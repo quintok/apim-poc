@@ -16,3 +16,6 @@ apis:
   - name: petstore
     properties:
       serviceUrl: https://petstore-backend.contoso.example
+  - name: animalstore
+    properties:
+      serviceUrl: https://animalstore-backend.contoso.example

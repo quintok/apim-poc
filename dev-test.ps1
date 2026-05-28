@@ -115,11 +115,12 @@ if ($SkipDiff -or $skipDiffEnv) {
     }
 }
 
-# --- 6. Merge policies into APIOps artifacts --------------------------------
-Run-Step "merge policies -> apim-artifacts/" {
+# --- 6. Merge policies into build output ------------------------------------
+Run-Step "merge policies -> dist/apim-artifacts/" {
     & "$PSScriptRoot/scripts/merge-policies-to-apiops.ps1" `
         -ArtifactsPath ./apim-artifacts `
-        -DistPath ./dist/policies
+        -DistPath ./dist/policies `
+        -OutputPath ./dist/apim-artifacts
 }
 
 # NOTE: Smoke tests (tests/Contoso.Apis.SmokeTests) are NOT included here.

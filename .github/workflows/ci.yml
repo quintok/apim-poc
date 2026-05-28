@@ -75,18 +75,19 @@ jobs:
             --o ./dist/policies \
             --format true
 
-      - name: Merge policies into APIOps artifacts
+      - name: Merge policies into build output
         shell: pwsh
         run: >-
           ./scripts/merge-policies-to-apiops.ps1
           -ArtifactsPath ./apim-artifacts
           -DistPath ./dist/policies
+          -OutputPath ./dist/apim-artifacts
 
       - name: Upload APIOps artifacts
         uses: actions/upload-artifact@v4
         with:
           name: apim-artifacts
-          path: apim-artifacts/
+          path: dist/apim-artifacts/
 
       - name: Spectral lint OpenAPI
         run: |
