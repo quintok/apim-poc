@@ -10,6 +10,8 @@ This ADR style is aligned with guidance from `github/awesome-copilot` ADR resour
 - [ADR-0002](./ADR-0002-ephemeral-apim-preview-environments.md): Use ephemeral APIM preview environments for PR validation.
 - [ADR-0003](./ADR-0003-auth0-jwt-validation-policy.md): Standardize Auth0 JWT validation as a reusable APIM policy document.
 - [ADR-0004](./ADR-0004-developer-portal-delegation-handler.md): Implement developer portal delegation with a .NET isolated Azure Function.
+- [ADR-0005](./ADR-0005-apiops-deployment-integration.md): Deploy APIM configuration via APIOps with Policy Toolkit integration.
+- [ADR-0006](./ADR-0006-smoke-tests.md): Post-deployment smoke tests as C# xUnit project.
 - [ADR Template](./ADR-template.md): Standard template for all new ADRs.
 
 ## ADR Standard

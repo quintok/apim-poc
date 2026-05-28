@@ -1,8 +1,9 @@
 # Azure APIM Policy Development Pipeline
 
-Starter template for developing **Azure API Management (APIM) Premium v2**
-policies **as code** with a fast local feedback loop, automated CI, and
-ephemeral cloud testing.
+Starter template for developing **Azure API Management (APIM)**
+policies **as code** with a fast local feedback loop, automated CI,
+ephemeral cloud testing, and [APIOps](https://github.com/Azure/apiops)
+deployment across dev, sit, and prod environments.
 
 Inspired by:
 
@@ -15,11 +16,14 @@ Inspired by:
 Hand-editing APIM `<policies>` XML is error-prone and hard to test. This
 repository shows how to:
 
-1. **Write policies in C#** as small, reusable fragments.
+1. **Write policies in C#** as small, reusable documents and fragments.
 2. **Unit-test** that C# logic against a simulated APIM context.
-3. **Compile** fragments to the XML APIM expects, on every build.
-4. **Lint** OpenAPI specs and detect breaking changes before they ship.
-5. **Provision an ephemeral APIM** per pull request for end-to-end validation.
+3. **Compile** documents to the XML APIM expects, on every build.
+4. **Merge** compiled XML into an APIOps artifact tree for deployment.
+5. **Lint** OpenAPI specs and detect breaking changes before they ship.
+6. **Deploy** via APIOps across dev / sit / prod with per-environment config.
+7. **Smoke-test** APIs post-deployment with a C# xUnit test project.
+8. **Provision ephemeral APIM** per pull request for end-to-end validation.
 
 ## Repository layout
 
@@ -33,23 +37,37 @@ repository shows how to:
 ├── packages/                       # Drop toolkit .nupkg files here (see README inside)
 ├── src/
 │   └── Contoso.Apis.Policies/      # Class library — policy code in C#
-│       ├── Fragments/              # Reusable building blocks (static helpers)
-│       └── Documents/              # Full [Document] classes composed of fragments
+│       ├── Documents/              # [Document] classes: GlobalPolicy, PetstoreApiPolicy, ...
+│       └── Fragments/              # Reusable constants & shared helpers
 ├── tests/
-│   └── Contoso.Apis.Policies.Tests # xUnit tests using Policy Toolkit test helpers
+│   ├── Contoso.Apis.Policies.Tests # xUnit unit tests for policy documents
+│   └── Contoso.Apis.SmokeTests     # xUnit post-deployment smoke tests (needs live APIM)
 ├── openapi/
 │   └── petstore.yaml               # Sample OpenAPI spec
+├── apim-artifacts/                 # APIOps artifact tree (committed)
+│   ├── apis/petstore/              # API definition + operations
+│   ├── fragments/                  # Policy fragment metadata
+│   ├── namedValues/                # APIM named values
+│   ├── subscriptions/              # Test subscriptions
+│   ├── configuration.dev.yaml      # Environment overrides (dev / sit / prod)
+│   ├── configuration.sit.yaml
+│   ├── configuration.prod.yaml
+│   └── policy.xml                  # Global policy (written by merge script)
 ├── .spectral.yml                   # Spectral ruleset (extends spectral:oas)
 ├── infra/
-│   ├── main.bicep                  # APIM Bicep (Premium / internal VNet)
-│   └── main.parameters.json
+│   ├── main.bicep                  # APIM Bicep (infra only — no APIs/policies)
+│   ├── main.parameters.json
+│   └── deploy-local.ps1            # Local smoke-test deployment script
 ├── scripts/
-│   └── openapi-diff.sh             # Breaking-change diff vs. baseline ref
+│   ├── openapi-diff.sh             # Breaking-change diff vs. baseline ref
+│   └── merge-policies-to-apiops.ps1 # Merges compiled XML into apim-artifacts/
 ├── .buildkite/
 │   └── pipeline.yaml               # Primary CI pipeline
 ├── .github/workflows/
 │   └── ephemeral-apim.yml          # Ephemeral APIM on PRs labelled `preview`
-├── dev-test.sh                     # One-stop local validation
+├── docs/adrs/                      # Architecture Decision Records
+├── dev-test.sh                     # One-stop local validation (bash)
+├── dev-test.ps1                    # One-stop local validation (PowerShell)
 ├── dist/policies/                  # (gitignored) compiled XML output
 └── LICENSE                         # MIT
 ```
@@ -57,34 +75,34 @@ repository shows how to:
 ## Development workflow
 
 ```
-   ┌────────────┐      ┌──────────┐      ┌────────────────┐      ┌────────────┐
-   │ author C#  │ ───▶ │ dev-test │ ───▶ │ PR + Buildkite │ ───▶ │ ephemeral  │
-   │ fragments  │      │   .sh    │      │   green build  │      │   APIM     │
-   └────────────┘      └──────────┘      └────────────────┘      └────────────┘
-                                                                       │
-                                                                       ▼
-                                                              ┌────────────────┐
-                                                              │ shared dev /   │
-                                                              │ prod APIM      │
-                                                              └────────────────┘
+   ┌────────────┐     ┌──────────┐     ┌────────────────┐     ┌────────────┐     ┌──────────┐
+   │ author C#  │ ──▶ │ dev-test │ ──▶ │ PR + Buildkite │ ──▶ │  APIOps    │ ──▶ │  smoke   │
+   │ policies  │     │ .sh/.ps1 │     │   green build  │     │  publisher │     │  tests   │
+   └────────────┘     └──────────┘     └────────────────┘     └────────────┘     └──────────┘
+                                                              │                    │
+                                         merge-policies       │   deploy to        │
+                                         -to-apiops.ps1 ───▶  │   dev/sit/prod     │
+                                         (CI step)            │                    │
+                                                              └────────────────────┘
 ```
 
-1. **Author** a new fragment under `src/Contoso.Apis.Policies/Fragments/`.
-   Reference it from a `Document` class to compose into a full policy.
-2. **Validate locally** with `./dev-test.sh` — build, test, compile to XML,
-   lint OpenAPI, and diff against `origin/main`.
-3. **Open a PR**. Buildkite re-runs the same steps and packages
-   `dist/policies/*.xml` as an artifact.
+1. **Author** a new document under `src/Contoso.Apis.Policies/Documents/`.
+   Global cross-cutting policies go in `GlobalPolicy.cs`; API-specific
+   policies go in per-API documents (e.g. `PetstoreApiPolicy.cs`).
+2. **Validate locally** with `./dev-test.sh` or `./dev-test.ps1` — build, test,
+   compile to XML, merge into `apim-artifacts/`, lint OpenAPI, and diff
+   against `origin/main`.
+3. **Open a PR**. Buildkite re-runs the same steps and merges compiled
+   policies into the APIOps artifact tree.
 4. **Label the PR `preview`** to provision an ephemeral APIM via GitHub
-   Actions (`infra/main.bicep`) for end-to-end validation.
-5. **Merge**. A downstream deployment pipeline (out of scope here) promotes
-   the compiled XML to the shared non-prod and production APIM instances —
-   typically via [APIOps](https://github.com/Azure/apiops).
+   Actions (`infra/main.bicep`) and run smoke tests.
+5. **Merge**. APIOps publisher deploys `apim-artifacts/` to the target
+   environment using `configuration.<env>.yaml` for overrides.
 
 ## Quick start
 
 Prerequisites: [.NET 8 SDK](https://dotnet.microsoft.com/), Node.js 20+ (for
-Spectral via `npx`), Bash.
+Spectral via `npx`), Bash or PowerShell.
 
 ### One-time bootstrap
 
@@ -104,14 +122,17 @@ dotnet tool restore                # installs `azure-apim-policy-compiler`
 ### Run the full validation loop
 
 ```bash
-# Run every check the CI pipeline runs.
+# Bash (Linux / macOS / WSL)
 ./dev-test.sh
+SKIP_DIFF=1 ./dev-test.sh    # skip openapi diff on first commit
 
-# Skip the openapi diff (e.g. on the very first commit).
-SKIP_DIFF=1 ./dev-test.sh
+# PowerShell (Windows)
+./dev-test.ps1
+./dev-test.ps1 -SkipDiff
 ```
 
-Output XML for deployment lands in `dist/policies/`.
+Output XML for deployment lands in `dist/policies/`. The merge step copies
+it into `apim-artifacts/` ready for APIOps.
 
 ### Run individual steps
 
@@ -133,6 +154,33 @@ npx --yes @stoplight/spectral-cli lint --ruleset .spectral.yml \
 ./scripts/openapi-diff.sh
 ```
 
+### Local smoke test deployment
+
+Deploy APIM infrastructure, seed demo APIs, push compiled policies, and
+run smoke tests against a live gateway — all from your local machine:
+
+```powershell
+# Deploy infra + seed APIs + push policies + run smoke tests
+./infra/deploy-local.ps1 -DeployPolicies -RunSmokeTests
+```
+
+### APIOps deployment
+
+In production, APIs and policies are deployed via APIOps — not the local
+script. The `apim-artifacts/` folder is the APIOps artifact tree:
+
+```bash
+# Deploy to dev
+apiops publish --configuration-file apim-artifacts/configuration.dev.yaml
+
+# Promote to sit / prod
+apiops publish --configuration-file apim-artifacts/configuration.sit.yaml
+apiops publish --configuration-file apim-artifacts/configuration.prod.yaml
+```
+
+See [`apim-artifacts/README.md`](./apim-artifacts/README.md) and
+[ADR-0005](./docs/adrs/ADR-0005-apiops-deployment-integration.md) for details.
+
 ## Using the Policy Toolkit
 
 Each **policy document** is a C# class decorated with `[Document]` that
@@ -146,7 +194,11 @@ Reusable behaviour (this template calls them "fragments") lives in
 as plain static helpers. Documents under
 [`src/Contoso.Apis.Policies/Documents/`](./src/Contoso.Apis.Policies/Documents/)
 compose them with ordinary method calls — so the same logic is shared
-without copy-pasting XML across APIs:
+without copy-pasting XML across APIs.
+
+**Global policy** (`GlobalPolicy.cs`) is applied to every request. It
+handles cross-cutting concerns like correlation-id propagation. API-level
+documents inherit global behaviour via `context.Base()`:
 
 ```csharp
 [Document("apis/petstore/policy.xml")]
@@ -182,25 +234,26 @@ lets tests capture a policy's configuration object and assert on it
 
 ## CI integration
 
-- **Buildkite** (primary): `.buildkite/pipeline.yaml` runs the same five
-  steps as `dev-test.sh`, then packages `dist/policies/*.xml` as a build
-  artifact for downstream deploys.
+- **Buildkite** (primary): `.buildkite/pipeline.yaml` runs the same steps
+  as `dev-test.sh` / `dev-test.ps1`, merges compiled policies into
+  `apim-artifacts/`, and produces the artifact tree for APIOps. Smoke
+  tests run post-deploy (see commented step in the pipeline).
 - **GitHub Actions** (optional, for ephemeral envs):
   `.github/workflows/ephemeral-apim.yml` deploys an APIM instance per PR
-  when the `preview` label is applied. Wire it up by configuring an OIDC
-  service principal and the `AZURE_*` repository secrets — see the comments
-  at the top of the workflow file.
+  when the `preview` label is applied, runs smoke tests, and comments on
+  the PR. OIDC service principal and `AZURE_*` secrets are pre-configured.
 
 ## Infrastructure
 
-`infra/main.bicep` deploys an APIM service in **internal VNet mode** by
-default (production topology). For ephemeral PR environments override
-`virtualNetworkType=None` and `sku=Developer` to keep cost and provisioning
-time low.
+`infra/main.bicep` deploys APIM infrastructure only — the service,
+observability (Log Analytics + App Insights), and optional delegation
+infra (Key Vault, Function App). APIs, policies, subscriptions, and
+named values are deployed by APIOps (see
+[ADR-0005](./docs/adrs/ADR-0005-apiops-deployment-integration.md)).
 
-Outputs (`apimResourceId`, `apimGatewayHostname`, `apimPrincipalId`,
-`developerPortalUrl`) are ready to be consumed by downstream Key Vault /
-Private DNS / APIOps steps.
+Default topology is **internal VNet mode** with **Premium** SKU. For
+ephemeral / dev environments override `virtualNetworkType=None` and
+`sku=StandardV2` or `sku=Developer`.
 
 ## Auth0 integration
 
@@ -427,6 +480,45 @@ across all dependencies.
    exceptions, or AI Failed Request rate. Add via
    `Microsoft.Insights/metricAlerts` + `scheduledQueryRules`.
 6. **Resource locks** on production-tier resources (APIM, KV, LAW).
+
+## Smoke tests
+
+Post-deployment smoke tests live in
+[`tests/Contoso.Apis.SmokeTests/`](./tests/Contoso.Apis.SmokeTests/).
+API owners add xUnit test classes extending `SmokeTestBase`:
+
+```csharp
+public class MyApiSmokeTests : SmokeTestBase
+{
+    protected override string ApiId => "my-api";
+    protected override string ApiPath => "my-api";
+
+    [Fact]
+    public async Task HealthCheck_Returns200()
+    {
+        var response = await Client.GetAsync("health");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+}
+```
+
+Smoke tests require `APIM_GATEWAY_URL` and per-API subscription key env
+vars. They are excluded from `dev-test.sh` / `dev-test.ps1` (offline
+validation) and run only after deployment to a live gateway. See
+[ADR-0006](./docs/adrs/ADR-0006-smoke-tests.md).
+
+## Architecture Decision Records
+
+Key design decisions are documented in [`docs/adrs/`](./docs/adrs/):
+
+| ADR | Decision |
+|-----|----------|
+| [ADR-0001](./docs/adrs/ADR-0001-author-policies-in-csharp.md) | Author policies in C# with Policy Toolkit |
+| [ADR-0002](./docs/adrs/ADR-0002-ephemeral-apim-preview-environments.md) | Ephemeral APIM preview environments |
+| [ADR-0003](./docs/adrs/ADR-0003-auth0-jwt-validation-policy.md) | Standardize Auth0 JWT validation |
+| [ADR-0004](./docs/adrs/ADR-0004-developer-portal-delegation-handler.md) | Developer portal delegation handler |
+| [ADR-0005](./docs/adrs/ADR-0005-apiops-deployment-integration.md) | APIOps deployment integration |
+| [ADR-0006](./docs/adrs/ADR-0006-smoke-tests.md) | Post-deployment smoke tests |
 
 ## References
 

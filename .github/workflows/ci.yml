@@ -1,0 +1,88 @@
+# CI workflow — runs on every PR and push to main.
+#
+# Mirrors dev-test.sh / dev-test.ps1: build, unit test, compile policies,
+# merge into APIOps artifacts, lint OpenAPI, diff for breaking changes.
+# Smoke tests are NOT included — they run post-deployment (see ephemeral-apim.yml).
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build-test:
+    name: Build, Test & Compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed for openapi-diff baseline
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Set up Node.js (for Spectral)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Restore
+        run: |
+          dotnet restore APIMPolicies.sln
+          dotnet tool restore
+
+      - name: Build
+        run: dotnet build APIMPolicies.sln -c Release --no-restore --nologo
+
+      - name: Unit tests
+        run: |
+          dotnet test APIMPolicies.sln -c Release --no-build --nologo \
+            --filter "FullyQualifiedName!~SmokeTests" \
+            --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: "**/TestResults/*.trx"
+
+      - name: Compile policies to XML
+        run: |
+          mkdir -p dist/policies
+          dotnet azure-apim-policy-compiler \
+            --s ./src/Contoso.Apis.Policies/Documents \
+            --o ./dist/policies \
+            --format true
+
+      - name: Merge policies into APIOps artifacts
+        shell: pwsh
+        run: |
+          ./scripts/merge-policies-to-apiops.ps1 \
+            -ArtifactsPath ./apim-artifacts \
+            -DistPath ./dist/policies
+
+      - name: Upload APIOps artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: apim-artifacts
+          path: apim-artifacts/
+
+      - name: Spectral lint OpenAPI
+        run: |
+          npx --yes @stoplight/spectral-cli lint --ruleset .spectral.yml \
+            "openapi/**/*.{yaml,yml,json}"
+
+      - name: OpenAPI breaking-change diff
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: bash scripts/openapi-diff.sh origin/${{ github.base_ref }}

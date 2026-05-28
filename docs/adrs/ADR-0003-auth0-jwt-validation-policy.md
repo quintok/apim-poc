@@ -54,7 +54,7 @@ Maintain a dedicated policy document (`ValidateAuth0JwtPolicy`) that enforces Au
 
 - IMP-001: Keep canonical JWT requirements in `ValidateAuth0JwtPolicy.cs`.
 - IMP-002: Validate configuration by unit tests that assert issuer, audience, scheme, and failure behavior.
-- IMP-003: Ensure infrastructure provisions `auth0-tenant-domain` and `auth0-audience` when Auth0 is enabled.
+- IMP-003: Named values (`auth0-tenant-domain`, `auth0-audience`) are managed in `apim-artifacts/namedValues/` and deployed via APIOps — not Bicep (see ADR-0005).
 
 ## Acceptance Criteria
 
@@ -68,4 +68,5 @@ Maintain a dedicated policy document (`ValidateAuth0JwtPolicy`) that enforces Au
 
 - REF-001: `src/Contoso.Apis.Policies/Documents/ValidateAuth0JwtPolicy.cs`
 - REF-002: `tests/Contoso.Apis.Policies.Tests/ValidateAuth0JwtPolicyTests.cs`
-- REF-003: `infra/main.bicep`
+- REF-003: `apim-artifacts/namedValues/`
+- REF-004: `apim-artifacts/fragments/validate-auth0-jwt/`

@@ -55,6 +55,8 @@ Author APIM policies as C# documents and fragments in `src/Contoso.Apis.Policies
 - IMP-001: Keep policy source in `src/Contoso.Apis.Policies` and test coverage in `tests/Contoso.Apis.Policies.Tests`.
 - IMP-002: Treat `dist/policies` as generated artifacts from CI/local validation.
 - IMP-003: Fail CI on build, test, or policy compiler errors.
+- IMP-004: Global cross-cutting policies (e.g. correlation-id) belong in `GlobalPolicy.cs`; API-specific policies inherit via `context.Base()`.
+- IMP-005: Compiled XML is merged into `apim-artifacts/` by `scripts/merge-policies-to-apiops.ps1` for APIOps deployment (see ADR-0005).
 
 ## Acceptance Criteria
 
@@ -68,3 +70,5 @@ Author APIM policies as C# documents and fragments in `src/Contoso.Apis.Policies
 - REF-001: `README.md`
 - REF-002: `src/Contoso.Apis.Policies`
 - REF-003: `tests/Contoso.Apis.Policies.Tests`
+- REF-004: `src/Contoso.Apis.Policies/Documents/GlobalPolicy.cs`
+- REF-005: `scripts/merge-policies-to-apiops.ps1`
