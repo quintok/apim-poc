@@ -3,6 +3,7 @@
     "displayName": "Petstore API",
     "description": "Minimal example API used to exercise the policy compilation pipeline.",
     "path": "petstore",
+    "apiRevision": "1",
     "protocols": ["https"],
     "subscriptionRequired": true,
     "serviceUrl": "https://echoapi.cloudapp.net/api",

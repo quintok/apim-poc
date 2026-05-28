@@ -141,3 +141,23 @@ jobs:
           CONFIGURATION_YAML_PATH: ${{ github.workspace }}/apim-artifacts/configuration.dev.yaml
           COMMIT_ID: ${{ github.sha }}
         run: publisher
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Smoke tests
+        env:
+          APIM_GATEWAY_URL: ${{ secrets.APIM_GATEWAY_URL }}
+          APIM_SUBSCRIPTION_KEY__PETSTORE: ${{ secrets.APIM_SUBSCRIPTION_KEY__PETSTORE }}
+        run: |
+          dotnet test tests/Contoso.Apis.SmokeTests/Contoso.Apis.SmokeTests.csproj \
+            -c Release --nologo --logger "trx;LogFileName=smoke-results.trx"
+
+      - name: Upload smoke test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-results
+          path: "**/TestResults/smoke-results.trx"
