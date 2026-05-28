@@ -1,0 +1,21 @@
+# Resources in APIM that are NOT managed by APIOps and should be ignored
+# during drift reconciliation. Add entries here for resources created by
+# Bicep, the portal, or APIM itself that should not be flagged or deleted.
+#
+# Use the resource name (not display name) as it appears in the APIM REST API.
+
+apis:
+  - echo-api                          # built-in demo API
+
+subscriptions:
+  - master                            # built-in all-access subscription
+  - echo-api-test-sub                 # scoped to built-in echo-api
+
+namedValues:
+  - 6a1652070461011eecabc173           # Logger-Credentials (auto-managed)
+  - 6a1654010461011eecabc207           # Logger-Credentials (auto-managed)
+  - 6a166c4228d4f6092c629710           # Logger-Credentials (auto-managed)
+  - 6a167ea10461011eecabc943           # Logger-Credentials (auto-managed)
+
+# fragments: []
+# apiRevisions: []
