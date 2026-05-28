@@ -44,6 +44,15 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      - name: Download Policy Toolkit packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v1.0.0 \
+            --repo Azure/azure-api-management-policy-toolkit \
+            --pattern "*.nupkg" \
+            --dir packages/
+
       - name: Build & compile policies to XML
         run: |
           dotnet restore APIMPolicies.sln

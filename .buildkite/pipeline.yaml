@@ -7,6 +7,7 @@ steps:
   - label: ":dotnet: Build & Test"
     key: build-test
     command:
+      - "gh release download v1.0.0 --repo Azure/azure-api-management-policy-toolkit --pattern '*.nupkg' --dir packages/"
       - "dotnet restore APIMPolicies.sln"
       - "dotnet tool restore"
       - "dotnet build APIMPolicies.sln -c Release --no-restore"
@@ -22,6 +23,7 @@ steps:
     key: compile-policies
     depends_on: build-test
     command:
+      - "gh release download v1.0.0 --repo Azure/azure-api-management-policy-toolkit --pattern '*.nupkg' --dir packages/"
       - "dotnet tool restore"
       - "dotnet azure-apim-policy-compiler --s ./src/Contoso.Apis.Policies/Documents --o ./dist/policies --format true"
     artifact_paths:
