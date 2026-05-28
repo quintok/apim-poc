@@ -15,6 +15,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  id-token: write  # required for OIDC login to Azure (deploy-dev job)
 
 jobs:
   build-test:
@@ -96,3 +97,47 @@ jobs:
         if: github.event_name == 'pull_request'
         continue-on-error: true
         run: bash scripts/openapi-diff.sh origin/${{ github.base_ref }}
+
+  # ===========================================================================
+  # Deploy to dev — runs after build-test, only on pushes to main.
+  # Uses APIOps publisher to push the merged artifact tree to the dev APIM.
+  # ===========================================================================
+  deploy-dev:
+    name: Deploy to Dev (APIOps)
+    needs: build-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download APIOps artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: apim-artifacts
+          path: apim-artifacts/
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Download APIOps publisher
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v7.0.3 --repo Azure/apiops \
+            --pattern "publisher-linux-x64.zip" --dir /tmp/apiops
+          cd /tmp/apiops && unzip publisher-linux-x64.zip && chmod +x publisher
+          echo "/tmp/apiops" >> $GITHUB_PATH
+
+      - name: Publish to dev APIM
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_RESOURCE_GROUP_NAME: rg-apim-poc
+          API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: ${{ github.workspace }}/apim-artifacts
+          CONFIGURATION_YAML_PATH: ${{ github.workspace }}/apim-artifacts/configuration.dev.yaml
+          COMMIT_ID: ${{ github.sha }}
+        run: publisher

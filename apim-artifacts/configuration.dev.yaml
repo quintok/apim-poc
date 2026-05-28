@@ -7,7 +7,7 @@
 # Usage:
 #   apiops publish --configuration-file configuration.dev.yaml
 #
-apimServiceName: $(apimServiceName)
+apimServiceName: apim-poc-8fdc26ac
 
 namedValues:
   - name: auth0-tenant-domain

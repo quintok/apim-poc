@@ -82,18 +82,37 @@ jobs:
             location=${{ env.LOCATION }}
             publisherEmail=apis@contoso.example
             publisherName="Contoso APIs"
+            sku=StandardV2
+            virtualNetworkType=None
 
-      # TODO: Run APIOps publisher here to deploy APIs, policies, named values
-      # from apim-artifacts/ with configuration.$ENV.yaml overlay.
+      - name: Merge policies into APIOps artifacts
+        shell: pwsh
+        run: >-
+          ./scripts/merge-policies-to-apiops.ps1
+          -ArtifactsPath ./apim-artifacts
+          -DistPath ./dist/policies
+
+      - name: Download APIOps publisher
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v7.0.3 --repo Azure/apiops \
+            --pattern "publisher-linux-x64.zip" --dir /tmp/apiops
+          cd /tmp/apiops && unzip publisher-linux-x64.zip && chmod +x publisher
+          echo "/tmp/apiops" >> $GITHUB_PATH
+
+      - name: Publish to ephemeral APIM (APIOps)
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_RESOURCE_GROUP_NAME: ${{ env.RESOURCE_GROUP }}
+          API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: ${{ github.workspace }}/apim-artifacts
+          API_MANAGEMENT_SERVICE_NAME: ${{ env.APIM_NAME }}
+        run: publisher
 
       - name: Run smoke tests
         if: success()
         env:
           APIM_GATEWAY_URL: https://${{ env.APIM_NAME }}.azure-api.net
-          # Subscription keys are resolved by the deploy script or APIOps.
-          # For ephemeral envs, seed APIs + keys before this step.
-          # APIM_SUBSCRIPTION_KEY__ECHO_API: ${{ steps.seed-apis.outputs.echo-key }}
-          # APIM_SUBSCRIPTION_KEY__PETSTORE: ${{ steps.seed-apis.outputs.petstore-key }}
         run: |
           dotnet test tests/Contoso.Apis.SmokeTests/Contoso.Apis.SmokeTests.csproj \
             -c Release --nologo \
