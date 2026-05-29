@@ -12,6 +12,7 @@ This ADR style is aligned with guidance from `github/awesome-copilot` ADR resour
 - [ADR-0004](./ADR-0004-developer-portal-delegation-handler.md): Implement developer portal delegation with a .NET isolated Azure Function.
 - [ADR-0005](./ADR-0005-apiops-deployment-integration.md): Deploy APIM configuration via APIOps with Policy Toolkit integration.
 - [ADR-0006](./ADR-0006-smoke-tests.md): Post-deployment smoke tests as C# xUnit project.
+- [ADR-0007](./ADR-0007-time-based-api-lifecycle.md): Time-based API release and retirement via lifecycle gate policy.
 - [ADR Template](./ADR-template.md): Standard template for all new ADRs.
 
 ## ADR Standard
