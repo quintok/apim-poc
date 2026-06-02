@@ -44,16 +44,33 @@ param sku string = 'Premium'
 @maxValue(12)
 param capacity int = 1
 
-@description('VNet integration mode. `None` for ephemeral PR environments, `Internal` for production.')
+@description('VNet integration mode. `Internal` (default) is the private, production posture. `None` is for ephemeral PR previews that need a publicly reachable gateway for smoke tests; in that mode the VNet/PE/DNS resources below are also skipped (set `deployVirtualNetwork=false`).')
 @allowed([
   'None'
-  'External'
   'Internal'
 ])
 param virtualNetworkType string = 'Internal'
 
-@description('Resource ID of the subnet to delegate APIM into. Required when virtualNetworkType != None.')
+@description('Set to true (default) to deploy a new VNet with an APIM subnet (and Function App integration subnet when delegation is enabled). Set to false to BYO an existing subnet via `subnetResourceId`.')
+param deployVirtualNetwork bool = true
+
+@description('Resource ID of an EXISTING subnet to delegate APIM into. Required only when `deployVirtualNetwork` is false. When `deployVirtualNetwork` is true this is ignored and the new subnet is used.')
 param subnetResourceId string = ''
+
+@description('Name of the VNet to create (used only when `deployVirtualNetwork` is true).')
+param vnetName string = '${apimName}-vnet'
+
+@description('Address space for the new VNet (used only when `deployVirtualNetwork` is true).')
+param vnetAddressPrefix string = '10.40.0.0/16'
+
+@description('Address prefix for the APIM subnet (used only when `deployVirtualNetwork` is true). Must be /27 or larger for Premium/Developer SKUs.')
+param apimSubnetAddressPrefix string = '10.40.1.0/27'
+
+@description('Address prefix for the Function App regional VNet integration subnet (used only when `deployVirtualNetwork` is true and `enableDelegation` is true).')
+param functionSubnetAddressPrefix string = '10.40.2.0/26'
+
+@description('Address prefix for private endpoints (used only when `deployVirtualNetwork` is true).')
+param privateEndpointSubnetAddressPrefix string = '10.40.3.0/27'
 
 @description('Tags applied to every resource.')
 param tags object = {
@@ -186,8 +203,178 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = if (enableObse
 }
 
 // -----------------------------------------------------------------------------
+// Virtual Network (optional — set deployVirtualNetwork=false to BYO)
+// -----------------------------------------------------------------------------
+// Layout:
+//   * apim                — delegated subnet for APIM Internal VNet mode.
+//                           NSG must allow the APIM control-plane inbound
+//                           rules documented at
+//                           https://learn.microsoft.com/azure/api-management/api-management-using-with-internal-vnet
+//   * functions           — regional VNet integration subnet for the Flex
+//                           Consumption delegation Function App. Delegated
+//                           to Microsoft.App/environments (Flex requirement).
+//   * private-endpoints   — flat subnet for Key Vault / Storage private
+//                           endpoints (not provisioned by this template,
+//                           but the subnet is reserved so a follow-up PR
+//                           can drop PEs in without re-IPing).
+// -----------------------------------------------------------------------------
+
+// APIM control-plane NSG: minimum required inbound rules for Internal VNet
+// mode. Source: Microsoft Learn (link above).
+resource apimNsg 'Microsoft.Network/networkSecurityGroups@2024-01-01' = if (deployVirtualNetwork) {
+  name: '${apimName}-apim-nsg'
+  location: location
+  tags: tags
+  properties: {
+    securityRules: [
+      {
+        name: 'AllowApimManagementInbound'
+        properties: {
+          priority: 100
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '3443'
+          sourceAddressPrefix: 'ApiManagement'
+          destinationAddressPrefix: 'VirtualNetwork'
+        }
+      }
+      {
+        name: 'AllowAzureLoadBalancerInbound'
+        properties: {
+          priority: 110
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '6390'
+          sourceAddressPrefix: 'AzureLoadBalancer'
+          destinationAddressPrefix: 'VirtualNetwork'
+        }
+      }
+      {
+        name: 'AllowTrafficManagerInbound'
+        properties: {
+          priority: 120
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '443'
+          sourceAddressPrefix: 'AzureTrafficManager'
+          destinationAddressPrefix: 'VirtualNetwork'
+        }
+      }
+    ]
+  }
+}
+
+resource functionsNsg 'Microsoft.Network/networkSecurityGroups@2024-01-01' = if (deployVirtualNetwork) {
+  name: '${apimName}-functions-nsg'
+  location: location
+  tags: tags
+  properties: {
+    securityRules: []
+  }
+}
+
+resource privateEndpointsNsg 'Microsoft.Network/networkSecurityGroups@2024-01-01' = if (deployVirtualNetwork) {
+  name: '${apimName}-pe-nsg'
+  location: location
+  tags: tags
+  properties: {
+    securityRules: []
+  }
+}
+
+resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = if (deployVirtualNetwork) {
+  name: vnetName
+  location: location
+  tags: tags
+  properties: {
+    addressSpace: {
+      addressPrefixes: [
+        vnetAddressPrefix
+      ]
+    }
+    subnets: [
+      {
+        name: 'apim'
+        properties: {
+          addressPrefix: apimSubnetAddressPrefix
+          networkSecurityGroup: {
+            id: apimNsg.id
+          }
+          privateEndpointNetworkPolicies: 'Disabled'
+        }
+      }
+      {
+        name: 'functions'
+        properties: {
+          addressPrefix: functionSubnetAddressPrefix
+          networkSecurityGroup: {
+            id: functionsNsg.id
+          }
+          delegations: [
+            {
+              name: 'Microsoft.App.environments'
+              properties: {
+                serviceName: 'Microsoft.App/environments'
+              }
+            }
+          ]
+        }
+      }
+      {
+        name: 'private-endpoints'
+        properties: {
+          addressPrefix: privateEndpointSubnetAddressPrefix
+          networkSecurityGroup: {
+            id: privateEndpointsNsg.id
+          }
+          privateEndpointNetworkPolicies: 'Disabled'
+        }
+      }
+    ]
+  }
+}
+
+// Resolved subnet ID used by APIM: the new subnet when we provisioned the
+// VNet, otherwise the BYO `subnetResourceId` parameter. When BYO mode is
+// chosen, an empty `subnetResourceId` will fail APIM validation at deploy
+// time with a clear error.
+var resolvedApimSubnetId = deployVirtualNetwork
+  ? '${vnet.id}/subnets/apim'
+  : subnetResourceId
+
+// -----------------------------------------------------------------------------
 // APIM
 // -----------------------------------------------------------------------------
+// publicNetworkAccess self-healing pattern (Option A):
+//   * First deploy: the service doesn't exist yet, so `tryGet` returns null
+//     and we fall back to 'Enabled' — required by the APIM RP because the
+//     private endpoint must exist BEFORE PNA can be set to 'Disabled'.
+//     A post-deploy step (see `infra/deploy-local.ps1`) flips it once the PE
+//     is in place.
+//   * Subsequent deploys: `tryGet` returns the current value ('Disabled'
+//     after the post-step has run). We preserve it, so re-running Bicep
+//     never re-opens the public endpoint.
+// Docs reference:
+//   https://learn.microsoft.com/azure/api-management/private-endpoint#optionally-disable-public-network-access
+// -----------------------------------------------------------------------------
+resource existingApim 'Microsoft.ApiManagement/service@2023-05-01-preview' existing = {
+  name: apimName
+}
+
+var currentPublicNetworkAccess = existingApim.?properties.?publicNetworkAccess ?? ''
+// When VNet integration is off (ephemeral previews), public access must
+// stay enabled — there's nothing to fall back to. Otherwise apply the
+// self-healing rule.
+var desiredPublicNetworkAccess = virtualNetworkType == 'None'
+  ? 'Enabled'
+  : (empty(currentPublicNetworkAccess) ? 'Enabled' : currentPublicNetworkAccess)
+
 resource apim 'Microsoft.ApiManagement/service@2023-05-01-preview' = {
   name: apimName
   location: location
@@ -204,7 +391,7 @@ resource apim 'Microsoft.ApiManagement/service@2023-05-01-preview' = {
     publisherName: publisherName
     virtualNetworkType: virtualNetworkType
     virtualNetworkConfiguration: virtualNetworkType == 'None' ? null : {
-      subnetResourceId: subnetResourceId
+      subnetResourceId: resolvedApimSubnetId
     }
     // Hardened defaults: disable legacy protocols & ciphers, enforce TLS 1.2+.
     customProperties: {
@@ -215,7 +402,74 @@ resource apim 'Microsoft.ApiManagement/service@2023-05-01-preview' = {
       'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Ssl30': 'false'
       'Microsoft.WindowsAzure.ApiManagement.Gateway.Protocols.Server.Http2': 'true'
     }
-    publicNetworkAccess: virtualNetworkType == 'Internal' ? 'Disabled' : 'Enabled'
+    // Self-healed value — see comment block above the `existingApim` lookup.
+    publicNetworkAccess: desiredPublicNetworkAccess
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Private endpoint + private DNS zone for the APIM gateway
+// -----------------------------------------------------------------------------
+// Inbound private access path. Provisioned in the dedicated
+// `private-endpoints` subnet of the VNet this template creates (or skipped
+// entirely in BYO mode — the PE is then the caller's responsibility).
+//
+// Once this PE exists, the post-deploy step in `infra/deploy-local.ps1`
+// can flip `publicNetworkAccess` to `Disabled` via `az apim update`.
+// -----------------------------------------------------------------------------
+resource apimPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-01-01' = if (deployVirtualNetwork) {
+  name: '${apimName}-gateway-pe'
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: '${vnet.id}/subnets/private-endpoints'
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'gateway'
+        properties: {
+          privateLinkServiceId: apim.id
+          groupIds: [
+            'Gateway'
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource apimPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = if (deployVirtualNetwork) {
+  name: 'privatelink.azure-api.net'
+  location: 'global'
+  tags: tags
+}
+
+resource apimPrivateDnsZoneVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (deployVirtualNetwork) {
+  parent: apimPrivateDnsZone
+  name: '${vnetName}-link'
+  location: 'global'
+  tags: tags
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnet.id
+    }
+  }
+}
+
+resource apimPrivateEndpointDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-01-01' = if (deployVirtualNetwork) {
+  parent: apimPrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'privatelink-azure-api-net'
+        properties: {
+          privateDnsZoneId: apimPrivateDnsZone.id
+        }
+      }
+    ]
   }
 }
 
@@ -756,3 +1010,21 @@ output logAnalyticsWorkspaceId string = enableObservability ? logAnalytics.id : 
 
 @description('Resource ID of the Application Insights component used by APIM and the delegation handler (empty when observability is disabled).')
 output applicationInsightsId string = enableObservability ? appInsights.id : ''
+
+@description('Resource ID of the VNet provisioned by this template (empty when deployVirtualNetwork is false).')
+output vnetResourceId string = deployVirtualNetwork ? vnet.id : ''
+
+@description('Resource ID of the APIM subnet actually used (either the new one or the BYO subnet).')
+output apimSubnetResourceId string = resolvedApimSubnetId
+
+@description('Resource ID of the Function App regional integration subnet (empty when deployVirtualNetwork is false).')
+output functionsSubnetResourceId string = deployVirtualNetwork ? '${vnet.id}/subnets/functions' : ''
+
+@description('Resource ID of the private-endpoints subnet (empty when deployVirtualNetwork is false).')
+output privateEndpointsSubnetResourceId string = deployVirtualNetwork ? '${vnet.id}/subnets/private-endpoints' : ''
+
+@description('Resource ID of the APIM gateway private endpoint (empty when deployVirtualNetwork is false).')
+output apimPrivateEndpointId string = deployVirtualNetwork ? apimPrivateEndpoint.id : ''
+
+@description('Current publicNetworkAccess value. After first deploy this is `Enabled`; flip it via post-deploy `az apim update --public-network-access false`. Subsequent Bicep runs preserve the post-step value.')
+output apimPublicNetworkAccess string = desiredPublicNetworkAccess
