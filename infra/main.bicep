@@ -44,14 +44,15 @@ param sku string = 'Premium'
 @maxValue(12)
 param capacity int = 1
 
-@description('VNet integration mode. `Internal` (default) is the private, production posture. `None` is for ephemeral PR previews that need a publicly reachable gateway for smoke tests; in that mode the VNet/PE/DNS resources below are also skipped (set `deployVirtualNetwork=false`).')
+@description('VNet integration mode. Must be `None` for v2 SKUs (StandardV2/PremiumV2) — v2 only supports outbound VNet integration via `virtualNetworkConfiguration`, never `Internal` mode. `Internal` is only valid for classic Developer/Premium tiers. The APIM RP returns `ManagingVirtualNetworkConfigurationNotSupported` if you set `Internal` on a v2 SKU.')
 @allowed([
   'None'
+  'External'
   'Internal'
 ])
-param virtualNetworkType string = 'Internal'
+param virtualNetworkType string = 'None'
 
-@description('Desired publicNetworkAccess value. The APIM RP only accepts `Disabled` AFTER a private endpoint exists, so callers must pass `Enabled` on the first deploy. Subsequent deploys should pass the current live value (read via `az apim show`) so the lockdown flip done by the pipeline is preserved — see the deploy-dev job in `.github/workflows/ci.yml`. When `virtualNetworkType==None` this is forced to `Enabled` regardless. Docs: https://learn.microsoft.com/azure/api-management/private-endpoint#optionally-disable-public-network-access')
+@description('Desired publicNetworkAccess value. The APIM RP only accepts `Disabled` AFTER a private endpoint exists, so callers must pass `Enabled` on the first deploy. Subsequent deploys should pass the current live value (read via `az apim show`) so the lockdown flip done by the pipeline is preserved — see the deploy-dev job in `.github/workflows/ci.yml`. When `deployVirtualNetwork==false` (no PE) this is forced to `Enabled` regardless. Docs: https://learn.microsoft.com/azure/api-management/private-endpoint#optionally-disable-public-network-access')
 @allowed([
   'Enabled'
   'Disabled'
@@ -314,6 +315,18 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = if (deployVirtual
             id: apimNsg.id
           }
           privateEndpointNetworkPolicies: 'Disabled'
+          // Required for APIM v2 (StandardV2/PremiumV2) outbound VNet
+          // integration. v2 SKUs use regional VNet integration (same
+          // mechanism as App Service / Functions), which requires the
+          // subnet be delegated to `Microsoft.Web/serverFarms`.
+          delegations: [
+            {
+              name: 'Microsoft.Web.serverFarms'
+              properties: {
+                serviceName: 'Microsoft.Web/serverFarms'
+              }
+            }
+          ]
         }
       }
       {
@@ -368,12 +381,12 @@ var resolvedApimSubnetId = deployVirtualNetwork
 //       the lockdown step has run), so Bicep never re-opens public access.
 //   * Reading the value inside Bicep via an `existing` resource of the same
 //     name creates a self-cycle, which is why this is parameter-driven.
-//   * `virtualNetworkType=='None'` (ephemeral previews) hard-forces `Enabled`
+//   * `deployVirtualNetwork==false` (ephemeral previews) hard-forces `Enabled`
 //     regardless of the parameter — there's no PE to gate behind.
 // Docs:
 //   https://learn.microsoft.com/azure/api-management/private-endpoint#optionally-disable-public-network-access
 // -----------------------------------------------------------------------------
-var effectivePublicNetworkAccess = virtualNetworkType == 'None' ? 'Enabled' : publicNetworkAccess
+var effectivePublicNetworkAccess = deployVirtualNetwork ? publicNetworkAccess : 'Enabled'
 
 resource apim 'Microsoft.ApiManagement/service@2023-05-01-preview' = {
   name: apimName
@@ -389,10 +402,15 @@ resource apim 'Microsoft.ApiManagement/service@2023-05-01-preview' = {
   properties: {
     publisherEmail: publisherEmail
     publisherName: publisherName
+    // virtualNetworkType: keep 'None' for v2 SKUs (StandardV2/PremiumV2).
+    // Only classic Developer/Premium accept 'Internal'/'External'.
     virtualNetworkType: virtualNetworkType
-    virtualNetworkConfiguration: virtualNetworkType == 'None' ? null : {
+    // Outbound VNet integration. Wired whenever we provisioned a VNet,
+    // regardless of virtualNetworkType — for v2 SKUs this is the *only*
+    // VNet hookup; for classic SKUs it pairs with virtualNetworkType.
+    virtualNetworkConfiguration: deployVirtualNetwork ? {
       subnetResourceId: resolvedApimSubnetId
-    }
+    } : null
     // Hardened defaults: disable legacy protocols & ciphers, enforce TLS 1.2+.
     customProperties: {
       'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.TLS10': 'false'
