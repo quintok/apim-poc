@@ -44,13 +44,13 @@ param sku string = 'Premium'
 @maxValue(12)
 param capacity int = 1
 
-@description('VNet integration mode. Must be `None` for v2 SKUs (StandardV2/PremiumV2) — v2 only supports outbound VNet integration via `virtualNetworkConfiguration`, never `Internal` mode. `Internal` is only valid for classic Developer/Premium tiers. The APIM RP returns `ManagingVirtualNetworkConfigurationNotSupported` if you set `Internal` on a v2 SKU.')
+@description('VNet integration mode. Behaviour differs by SKU:\n  - Classic Developer/Premium: `External` = external VNet injection (gateway public), `Internal` = internal injection (gateway private to VNet).\n  - StandardV2/PremiumV2: only `External` is valid for outbound VNet integration; gateway privacy comes from a private endpoint, not from `Internal`. The APIM RP returns `ManagingVirtualNetworkConfigurationNotSupported` if you set `Internal` on a v2 SKU, and `VirtualNetworkTypeCannotBeNone` if you set `None` while `virtualNetworkConfiguration` is non-null.\n  - Any SKU: `None` = no VNet wiring (used for ephemeral previews; also requires `deployVirtualNetwork=false` so `virtualNetworkConfiguration` is null).\nDefault `External` works for both classic and v2.')
 @allowed([
   'None'
   'External'
   'Internal'
 ])
-param virtualNetworkType string = 'None'
+param virtualNetworkType string = 'External'
 
 @description('Desired publicNetworkAccess value. The APIM RP only accepts `Disabled` AFTER a private endpoint exists, so callers must pass `Enabled` on the first deploy. Subsequent deploys should pass the current live value (read via `az apim show`) so the lockdown flip done by the pipeline is preserved — see the deploy-dev job in `.github/workflows/ci.yml`. When `deployVirtualNetwork==false` (no PE) this is forced to `Enabled` regardless. Docs: https://learn.microsoft.com/azure/api-management/private-endpoint#optionally-disable-public-network-access')
 @allowed([
@@ -402,12 +402,16 @@ resource apim 'Microsoft.ApiManagement/service@2023-05-01-preview' = {
   properties: {
     publisherEmail: publisherEmail
     publisherName: publisherName
-    // virtualNetworkType: keep 'None' for v2 SKUs (StandardV2/PremiumV2).
-    // Only classic Developer/Premium accept 'Internal'/'External'.
-    virtualNetworkType: virtualNetworkType
-    // Outbound VNet integration. Wired whenever we provisioned a VNet,
-    // regardless of virtualNetworkType — for v2 SKUs this is the *only*
-    // VNet hookup; for classic SKUs it pairs with virtualNetworkType.
+    // Pair `virtualNetworkType` with `virtualNetworkConfiguration`:
+    //   - When we provisioned a VNet, use the requested mode (default
+    //     `External`, which is the only valid mode for StandardV2/PremiumV2
+    //     outbound integration and also works as external injection on
+    //     classic Premium/Developer).
+    //   - When we did NOT provision a VNet, both must be unset:
+    //     `virtualNetworkType` MUST be `None` (RP rejects any other value
+    //     when `virtualNetworkConfiguration` is null), so we override the
+    //     parameter rather than let an ephemeral preview break.
+    virtualNetworkType: deployVirtualNetwork ? virtualNetworkType : 'None'
     virtualNetworkConfiguration: deployVirtualNetwork ? {
       subnetResourceId: resolvedApimSubnetId
     } : null

@@ -176,14 +176,39 @@ jobs:
       # Bicep deploy above ensures. Run unconditionally; it's a no-op when
       # already `Disabled`. The detect step above then preserves this value
       # on every subsequent Bicep run, so no flap.
+      #
+      # NB: We use a direct REST PATCH instead of `az apim update`. The CLI
+      # pins an older api-version that the APIM RP rejects for v2 SKUs with:
+      #   (OperationSupportedInSkuForApiVersions) Operation on StandardV2 SKU
+      #   is only supported in the api-versions 2023-03-01-preview, ..., 2024-05-01, ...
       - name: Lock down APIM (disable public network access)
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
-          az apim update \
-            --name apim-poc-8fdc26ac \
-            --resource-group rg-apim-poc \
-            --public-network-access false \
+          set -euo pipefail
+          uri="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/rg-apim-poc/providers/Microsoft.ApiManagement/service/apim-poc-8fdc26ac?api-version=2024-05-01"
+          az rest --method patch --uri "$uri" \
+            --body '{"properties":{"publicNetworkAccess":"Disabled"}}' \
             --output none
-          echo "publicNetworkAccess is now Disabled"
+          echo "PATCH submitted; polling provisioningState (timeout 20 min)…"
+          # APIM v2 PATCH is async; the next workflow step (APIOps publish)
+          # PATCHes Microsoft.ApiManagement/service/* children, which the RP
+          # rejects with 409 while the parent service is `Updating`. Wait
+          # for the service to settle before continuing.
+          for i in $(seq 1 40); do
+            state=$(az apim show \
+              --name apim-poc-8fdc26ac \
+              --resource-group rg-apim-poc \
+              --query provisioningState -o tsv)
+            echo "  [$i/40] provisioningState=$state"
+            case "$state" in
+              Succeeded) echo "Lockdown complete."; exit 0 ;;
+              Failed|Canceled) echo "::error::APIM provisioningState=$state"; exit 1 ;;
+            esac
+            sleep 30
+          done
+          echo "::error::Timed out waiting for APIM lockdown to complete (20 min)"
+          exit 1
 
       - name: Download APIOps publisher
         env:
