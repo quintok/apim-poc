@@ -84,6 +84,7 @@ jobs:
             publisherName="Contoso APIs"
             sku=StandardV2
             virtualNetworkType=None
+            deployVirtualNetwork=false
 
       - name: Merge policies into APIOps artifacts
         shell: pwsh

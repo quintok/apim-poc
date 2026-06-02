@@ -125,6 +125,66 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # =====================================================================
+      # IaC deploy (Bicep) — runs BEFORE APIOps so the APIM instance, VNet,
+      # private endpoint, and DNS zone exist (or are reconciled) before any
+      # API/policy content is published.
+      #
+      # publicNetworkAccess self-healing:
+      #   The APIM RP only accepts `Disabled` AFTER a private endpoint
+      #   exists, so we can't hardcode `Disabled` in Bicep (first deploy
+      #   would fail) nor `Enabled` (every re-run would re-open the public
+      #   endpoint). Instead we read the live value here and pass it back
+      #   into the template, defaulting to `Enabled` when the service
+      #   doesn't exist yet.
+      # Docs: https://learn.microsoft.com/azure/api-management/private-endpoint#optionally-disable-public-network-access
+      # =====================================================================
+      - name: Detect current publicNetworkAccess
+        id: pna
+        run: |
+          value=$(az apim show \
+            --name apim-poc-8fdc26ac \
+            --resource-group rg-apim-poc \
+            --query publicNetworkAccess \
+            -o tsv 2>/dev/null || echo "Enabled")
+          if [ -z "$value" ]; then value="Enabled"; fi
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+          echo "Current publicNetworkAccess: $value"
+
+      - name: Deploy infra (Bicep)
+        id: infra
+        uses: azure/arm-deploy@v2
+        with:
+          scope: resourcegroup
+          subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          resourceGroupName: rg-apim-poc
+          template: infra/main.bicep
+          parameters: >-
+            apimName=apim-poc-8fdc26ac
+            publisherEmail=${{ secrets.APIM_PUBLISHER_EMAIL }}
+            publisherName=Contoso
+            sku=StandardV2
+            capacity=1
+            deployVirtualNetwork=true
+            publicNetworkAccess=${{ steps.pna.outputs.value }}
+            enableObservability=true
+            enableDelegation=false
+          failOnStdErr: false
+
+      # Per the APIM private-endpoint docs, `publicNetworkAccess` can only
+      # be set to `Disabled` AFTER a private endpoint is in place — which the
+      # Bicep deploy above ensures. Run unconditionally; it's a no-op when
+      # already `Disabled`. The detect step above then preserves this value
+      # on every subsequent Bicep run, so no flap.
+      - name: Lock down APIM (disable public network access)
+        run: |
+          az apim update \
+            --name apim-poc-8fdc26ac \
+            --resource-group rg-apim-poc \
+            --public-network-access false \
+            --output none
+          echo "publicNetworkAccess is now Disabled"
+
       - name: Download APIOps publisher
         env:
           GH_TOKEN: ${{ github.token }}
